@@ -1,0 +1,6 @@
+{
+  "name": "Project Atlas - Ocean Intelligence",
+  "description": "Unified marine intelligence platform aggregating, analyzing, and predicting critical oceanic data layers with geospatial precision.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
