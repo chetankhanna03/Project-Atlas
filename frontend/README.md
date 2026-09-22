@@ -1,20 +1,29 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Project Atlas frontend
 
-# Run and deploy your AI Studio app
+React, TypeScript and Vite ocean dashboard. FloatChat connects to the real Atlas
+backend; the other dashboard views still contain prototype data.
 
-This contains everything you need to run your app locally.
+## Run locally
 
-View your app in AI Studio: https://ai.studio/apps/73f23301-363c-4c3f-a460-85500d3abd77
+1. Start the backend with `backend/start-local.ps1` from the repository root.
+2. In `frontend/`, run `npm install` and `npm run dev`.
+3. Open http://localhost:3000 and select FloatChat.
 
-## Run Locally
+The Vite `/api` proxy points to http://127.0.0.1:8000. For production, configure
+an equivalent same-origin reverse proxy. Put model keys only in `backend/.env`;
+the browser does not call model providers directly.
 
-**Prerequisites:**  Node.js
+FloatChat supports cited evidence, real retrieved-value charts, follow-up context,
+cancellation, selected document retrieval and administrator document imports.
+Conversation state is kept in memory and resets when leaving the view or starting
+a new conversation. The scientific knowledge library is shared, not per-user.
 
+Model and RAG setup: [backend AI guide](../backend/AI_ENGINE.md).
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Validation
+
+```sh
+npm run lint
+npm test
+npm run build
+```

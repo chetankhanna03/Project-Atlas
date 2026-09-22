@@ -1,0 +1,14 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+sqlalchemy>=2.0,<3
+psycopg2-binary>=2.9,<3
+pydantic-settings>=2.7,<3
+httpx>=0.28,<1
+python-multipart>=0.0.20,<1
+shapely>=2.0,<3
+langgraph>=1.0,<2
+pgvector>=0.4,<1
+pypdf>=6,<7
+neo4j>=5.28,<7
+netCDF4>=1.7,<2
+copernicusmarine>=2.4,<3

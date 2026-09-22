@@ -1,310 +1,340 @@
-import React, { useState } from 'react';
-import { INITIAL_CHAT_MESSAGES } from '../../data/oceanData';
-import { ChatMessage, ActiveTab } from '../../types';
+import React, { useEffect, useRef, useState } from "react";
+import { ActiveTab } from "../../types";
+import {
+  AIStatus,
+  ChatResponse,
+  getAIStatus,
+  Scope,
+  sendChat,
+} from "../../services/atlas";
+import { ChatEvidence } from "./ChatEvidence";
+import { ResearchLibrary } from "./ResearchLibrary";
 
-interface FloatChatViewProps {
+interface Props {
   setActiveTab: (tab: ActiveTab) => void;
   initialQuery?: string;
 }
+interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  result?: ChatResponse;
+  error?: boolean;
+}
+const suggestions = [
+  "Show SST at latitude 15, longitude 65",
+  "Which species have been observed in the Arabian Sea?",
+  "Find scientific literature about ocean warming and fisheries",
+];
 
-export const FloatChatView: React.FC<FloatChatViewProps> = ({ setActiveTab, initialQuery }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_CHAT_MESSAGES);
-  const [inputVal, setInputVal] = useState(initialQuery || '');
-  const [isThinking, setIsThinking] = useState(false);
-
-  const presetQueries = [
-    'Show Category 4 heatwaves in Indian Ocean',
-    'Compare Salinity in Bay of Bengal vs Arabian Sea',
-    'Predict tuna biomass migration under +1.5°C warming',
-    'Inspect ARGO float 2904102 dissolved oxygen profiles',
-  ];
-
-  const handleSend = (textToSend?: string) => {
-    const query = textToSend || inputVal;
-    if (!query.trim()) return;
-
-    const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      sender: 'user',
-      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }) + ' UTC',
-      content: query,
+export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState(initialQuery || "");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<AIStatus | null>(null);
+  const [connectionError, setConnectionError] = useState("");
+  const [context, setContext] = useState<Scope | null>(null);
+  const [documents, setDocuments] = useState<string[]>([]);
+  const [useLiterature, setUseLiterature] = useState(false);
+  const pending = useRef<AbortController | null>(null);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    getAIStatus(controller.signal)
+      .then(setStatus)
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setConnectionError(
+            "Cannot reach the Atlas backend. Start it on port 8000 and retry.",
+          );
+      });
+    return () => {
+      controller.abort();
+      pending.current?.abort();
     };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInputVal('');
-    setIsThinking(true);
-
-    setTimeout(() => {
-      let responseContent = `Cross-referencing multi-sensor satellite data (NOAA/Copernicus) and ARGO profiling array for "${query}":\n\n`;
-      let inlineMetric = {
-        title: 'Query Correlation Index',
-        value: '+1.4σ Dev',
-        confidence: '91% (Multi-source validated)',
-        source: 'Copernicus & ARGO Network',
-      };
-
-      if (query.toLowerCase().includes('heatwave') || query.toLowerCase().includes('warm')) {
-        responseContent += `Elevated Marine Heatwave conditions detected in targeted sectors. Surface thermal anomalies peak at +2.1°C above climatological baseline (1991-2020).\n\nKey Impacts:\n1. Accelerated stratification limiting vertical nutrient replenishment.\n2. Chlorophyll-a concentrations depressed by 18%.\n3. Biomass displacement toward deeper sub-thermocline bands.`;
-        inlineMetric = {
-          title: 'Peak SST Anomaly',
-          value: '+2.1°C',
-          confidence: '95% (NOAA Coral Reef Watch)',
-          source: 'NOAA CRW / Copernicus',
-        };
-      } else if (query.toLowerCase().includes('salinity')) {
-        responseContent += `Salinity contrast analysis confirms Bay of Bengal is substantially fresher (32.8-33.5 PSU) due to heavy monsoonal river discharge (Ganges-Brahmaputra), whereas the Arabian Sea maintains high salinity (35.5-36.8 PSU) driven by high evaporation rates and limited continental runoff.`;
-        inlineMetric = {
-          title: 'Salinity Delta (AS - BoB)',
-          value: '+3.2 PSU',
-          confidence: '98% (SMAP / ARGO Array)',
-          source: 'NASA JPL PO.DAAC',
-        };
-      } else if (query.toLowerCase().includes('tuna') || query.toLowerCase().includes('biomass') || query.toLowerCase().includes('fish')) {
-        responseContent += `Predictive habitat envelope models indicate yellowfin and skipjack tuna stocks will shift 120-180 nautical miles south-southeast over the next 18 months under continued +1.5°C thermal forcing, affecting regional artisanal fleet catch efficiency by ~28%.`;
-        inlineMetric = {
-          title: 'Predicted CPUE Shift',
-          value: '-28% yield',
-          confidence: '88% (FAO / ICES Hindcast)',
-          source: 'GFW & ICES Marine Science',
-        };
-      } else {
-        responseContent += `Telemetry retrieved from 4 active ARGO profiling floats and 3 ESA Copernicus L4 grid products. The oceanic parameters in this sector demonstrate high seasonal stability with slight positive anomalies in surface heat flux.`;
+  }, []);
+  useEffect(() => {
+    if (initialQuery) setInput(initialQuery);
+  }, [initialQuery]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, busy]);
+  async function send(value = input) {
+    const question = value.trim();
+    if (!question || pending.current || question.length > 2000) return;
+    const controller = new AbortController();
+    pending.current = controller;
+    const history = messages
+      .filter((message) => !message.error)
+      .slice(-8)
+      .map((message) => ({
+        role: message.role,
+        content: message.content.slice(0, 6000),
+      }));
+    setMessages((previous) => [
+      ...previous,
+      { id: crypto.randomUUID(), role: "user", content: question },
+    ]);
+    setInput("");
+    setBusy(true);
+    setConnectionError("");
+    const timeout = window.setTimeout(
+      () => controller.abort("timeout"),
+      130000,
+    );
+    try {
+      const result = await sendChat(
+        question,
+        history,
+        context,
+        documents,
+        useLiterature,
+        controller.signal,
+      );
+      if (!controller.signal.aborted) {
+        setContext(result.plan.scope);
+        setMessages((previous) => [
+          ...previous,
+          {
+            id: result.request_id,
+            role: "assistant",
+            content: result.answer,
+            result,
+          },
+        ]);
       }
-
-      const botMsg: ChatMessage = {
-        id: `msg-${Date.now() + 1}`,
-        sender: 'assistant',
-        timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }) + ' UTC',
-        content: responseContent,
-        agentChain: ['Planner Agent', 'Ocean Data RAG', 'Biomass Predictor'],
-        inlineData: inlineMetric,
-        actions: [
-          { label: 'View on Map', icon: 'map', actionType: 'map' },
-          { label: 'Show Sources', icon: 'source', actionType: 'sources' },
-          { label: 'Analyze Trend', icon: 'trending_up', actionType: 'analytics' },
-        ],
-      };
-
-      setMessages((prev) => [...prev, botMsg]);
-      setIsThinking(false);
-    }, 1100);
-  };
-
-  const handleActionClick = (actionType: 'map' | 'sources' | 'analytics' | 'export') => {
-    if (actionType === 'map') setActiveTab('map');
-    else if (actionType === 'sources') setActiveTab('sources');
-    else if (actionType === 'analytics') setActiveTab('analytics');
-    else {
-      alert('Report snapshot exported to workspace.');
+    } catch (error) {
+      if (
+        !controller.signal.aborted ||
+        controller.signal.reason === "timeout"
+      ) {
+        const content = controller.signal.aborted
+          ? "The request timed out. Try a narrower question."
+          : error instanceof Error
+            ? error.message
+            : "Could not retrieve an answer.";
+        setMessages((previous) => [
+          ...previous,
+          { id: crypto.randomUUID(), role: "assistant", content, error: true },
+        ]);
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      if (pending.current === controller) {
+        pending.current = null;
+        setBusy(false);
+      }
     }
-  };
-
+  }
+  function cancel() {
+    pending.current?.abort();
+    pending.current = null;
+    setBusy(false);
+  }
+  function reset() {
+    cancel();
+    setMessages([]);
+    setContext(null);
+    setInput("");
+  }
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f7f9fb]">
-      {/* Top FloatChat Header */}
-      <div className="bg-white border-b border-[#c4c6cf] px-4 md:px-8 py-3.5 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 shrink-0">
+      <header className="shrink-0 border-b border-slate-200 bg-white px-4 md:px-8 py-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-[#00BFFF] text-[22px]">forum</span>
-            <h1 className="font-bold text-lg text-[#001b3d] tracking-tight">
-              FloatChat Intelligence Interface
-            </h1>
+            <span className="material-symbols-outlined text-[#008ebe]">
+              forum
+            </span>
+            <h1 className="font-bold text-lg text-[#001b3d]">FloatChat</h1>
           </div>
-          <p className="text-[12px] text-[#44474e]">
-            Natural Language Retrieval across Multi-Source Oceanographic Telemetry &amp; Literature
+          <p className="text-xs text-slate-500 mt-1">
+            Ocean questions. Retrieved evidence. Traceable answers.
           </p>
         </div>
-
-        {/* Multi-Agent Execution Pipeline Badge */}
-        <div className="flex items-center gap-2 bg-[#f2f4f6] px-3 py-1.5 rounded border border-[#c4c6cf]">
-          <span className="font-label-caps text-[10px] text-[#44474e] uppercase">Agent Pipeline:</span>
-          <div className="flex items-center gap-1.5 text-[11px] font-data-mono text-[#001b3d]">
-            <span className="bg-white px-1.5 py-0.5 rounded border border-[#c4c6cf]">Planner</span>
-            <span className="text-[#74777f]">→</span>
-            <span className="bg-white px-1.5 py-0.5 rounded border border-[#c4c6cf] text-[#008ebe]">Ocean RAG</span>
-            <span className="text-[#74777f]">→</span>
-            <span className="bg-white px-1.5 py-0.5 rounded border border-[#c4c6cf] text-[#006633]">Fisheries Model</span>
-          </div>
+        <div className="flex items-center gap-3 text-xs">
+          <span className="rounded-full bg-slate-100 px-3 py-1.5 text-slate-600">
+            {status
+              ? status.model_configured
+                ? "Model configured"
+                : "Evidence-only mode"
+              : "Connecting..."}
+          </span>
+          <button
+            type="button"
+            onClick={reset}
+            className="border border-slate-300 rounded px-3 py-1.5 hover:bg-slate-50"
+          >
+            New conversation
+          </button>
         </div>
-      </div>
-
-      {/* Message Stream */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar">
+      </header>
+      {connectionError && (
+        <p
+          role="alert"
+          className="bg-amber-50 px-4 md:px-8 py-3 text-xs text-amber-900"
+        >
+          {connectionError}
+        </p>
+      )}
+      {status && !status.model_configured && (
+        <p className="bg-sky-50 px-4 md:px-8 py-2 text-xs text-sky-900">
+          A model is not configured yet. Atlas can retrieve data and quote
+          indexed documents; generated scientific explanations remain disabled.
+        </p>
+      )}
+      <ResearchLibrary selected={documents} onSelect={setDocuments} />
+      <div
+        className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar"
+        role="log"
+        aria-label="FloatChat conversation"
+        aria-live="polite"
+      >
         <div className="max-w-4xl mx-auto space-y-6">
-          {messages.map((msg) => {
-            const isUser = msg.sender === 'user';
-            return (
-              <div
-                key={msg.id}
-                className={`flex gap-3 md:gap-4 ${isUser ? 'justify-end' : 'justify-start'}`}
-              >
-                {!isUser && (
-                  <div className="w-9 h-9 rounded-full bg-[#001b3d] text-white flex items-center justify-center shrink-0 border border-[#00BFFF] shadow-xs mt-1">
-                    <span className="material-symbols-outlined text-[18px] text-[#00BFFF]">
-                      smart_toy
-                    </span>
-                  </div>
-                )}
-
-                <div className={`flex flex-col max-w-2xl ${isUser ? 'items-end' : 'items-start'}`}>
-                  {/* Timestamp & Sender */}
-                  <div className="flex items-center gap-2 mb-1 px-1">
-                    <span className="font-label-caps text-[10px] text-[#74777f] uppercase">
-                      {isUser ? 'Lead Oceanographer' : 'Atlas AI Marine Assistant'}
-                    </span>
-                    <span className="font-data-mono text-[10px] text-[#74777f]">
-                      {msg.timestamp}
-                    </span>
-                  </div>
-
-                  {/* Bubble Content */}
-                  <div
-                    className={`p-4 md:p-5 rounded shadow-xs text-xs md:text-sm leading-relaxed ${
-                      isUser
-                        ? 'bg-[#001b3d] text-white rounded-tr-none'
-                        : 'bg-white border border-[#c4c6cf] text-[#191c1e] rounded-tl-none'
-                    }`}
+          {messages.length === 0 && (
+            <div className="py-8 md:py-14">
+              <span className="font-label-caps text-[#008ebe]">
+                ATLAS OCEAN INTELLIGENCE
+              </span>
+              <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-[#001b3d] mt-3">
+                Start with a question about the ocean.
+              </h2>
+              <p className="max-w-xl text-sm text-slate-600 mt-3 leading-relaxed">
+                Explore observations, biodiversity and scientific literature.
+                Atlas selects the relevant agents and shows what each source can
+                support.
+              </p>
+              <div className="grid md:grid-cols-3 gap-3 mt-7">
+                {suggestions.map((query) => (
+                  <button
+                    key={query}
+                    onClick={() => send(query)}
+                    className="text-left text-xs leading-relaxed rounded-lg border border-slate-200 bg-white p-4 hover:border-[#008ebe] transition-colors"
                   >
-                    {/* Agent chain tags */}
-                    {msg.agentChain && (
-                      <div className="flex flex-wrap items-center gap-1.5 mb-3 pb-2 border-b border-[#e0e3e5]">
-                        <span className="font-label-caps text-[9px] text-[#74777f] uppercase">
-                          Execution Path:
-                        </span>
-                        {msg.agentChain.map((agent, i) => (
-                          <span
-                            key={i}
-                            className="font-data-mono text-[10px] bg-[#f2f4f6] text-[#001b3d] px-1.5 py-0.5 rounded border border-[#e0e3e5]"
-                          >
-                            {agent}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="whitespace-pre-line">{msg.content}</div>
-
-                    {/* Inline Data Card */}
-                    {msg.inlineData && (
-                      <div className="mt-4 p-3 bg-[#f7f9fb] border border-[#00BFFF] rounded flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
-                        <div>
-                          <div className="font-label-caps text-[10px] text-[#44474e] uppercase">
-                            {msg.inlineData.title}
-                          </div>
-                          <div className="text-xl font-bold text-[#001b3d] font-data-mono">
-                            {msg.inlineData.value}
-                          </div>
-                        </div>
-                        <div className="text-right sm:text-right text-[11px] font-data-mono text-[#008ebe]">
-                          {msg.inlineData.confidence}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Interactive Action Pills */}
-                    {msg.actions && (
-                      <div className="mt-4 pt-3 border-t border-[#e0e3e5] flex flex-wrap gap-2">
-                        {msg.actions.map((act, i) => (
-                          <button
-                            key={i}
-                            onClick={() => handleActionClick(act.actionType)}
-                            className="inline-flex items-center gap-1.5 bg-[#f2f4f6] hover:bg-[#001b3d] hover:text-white text-[#001b3d] border border-[#c4c6cf] px-3 py-1.5 rounded font-label-caps text-[11px] uppercase tracking-wider transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[15px]">{act.icon}</span>
-                            <span>{act.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {isUser && (
-                  <div className="w-9 h-9 rounded-full bg-[#001b3d] overflow-hidden border border-[#c4c6cf] shrink-0 mt-1">
-                    <img
-                      src="https://lh3.googleusercontent.com/aida-public/AB6AXuCmIj2ZiH67u8v_mV3SBtGZEVVz3xR4p-xwPaYBZAGjXMDxzW04giYkZuLn9YJT6M6n3kG783F308ovaUX6OgMt3FYPIwJoGXQa3ncUVEkg5zhK_MTWXj3AYQPHyjJFuLRKKnBbOAFon3MeHkmFSZ4nrGDF1bE2n6zLAJdr5df9EhMxBNTGWryt1Q0CKgaxvK2gfmG76suwns2vYJHZlInR_sNHGgqvlOH1IuACwd8eMz8Q3wtqmXcx0A"
-                      alt="User"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                )}
+                    {query}
+                    <span
+                      aria-hidden="true"
+                      className="block text-[#008ebe] mt-3"
+                    >
+                      Ask Atlas &rarr;
+                    </span>
+                  </button>
+                ))}
               </div>
-            );
-          })}
-
-          {isThinking && (
-            <div className="flex gap-3 items-center">
-              <div className="w-9 h-9 rounded-full bg-[#001b3d] text-white flex items-center justify-center shrink-0 border border-[#00BFFF]">
-                <span className="material-symbols-outlined text-[18px] text-[#00BFFF] animate-spin">
-                  sync
-                </span>
-              </div>
-              <div className="bg-white border border-[#c4c6cf] rounded px-4 py-3 text-xs text-[#44474e] flex items-center gap-2 shadow-xs">
-                <span className="font-data-mono">Synthesizing ARGO Telemetry &amp; RAG Knowledge Graph...</span>
-              </div>
+              <p className="text-xs text-slate-500 mt-5">
+                No evidence? Atlas will say so. Point observations and
+                correlations do not establish regional effects or causation.
+              </p>
             </div>
           )}
-        </div>
-      </div>
-
-      {/* Preset Query Chips & Input Box */}
-      <div className="bg-white border-t border-[#c4c6cf] p-4 md:p-6 shrink-0">
-        <div className="max-w-4xl mx-auto space-y-3">
-          {/* Query Suggestion Chips */}
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
-            <span className="font-label-caps text-[10px] text-[#74777f] uppercase whitespace-nowrap">
-              Suggested:
-            </span>
-            {presetQueries.map((chip, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleSend(chip)}
-                className="whitespace-nowrap text-xs bg-[#f2f4f6] hover:bg-[#e0e3e5] text-[#001b3d] border border-[#c4c6cf] px-3 py-1 rounded-full transition-colors font-medium cursor-pointer"
+          {messages.map((message) => (
+            <article
+              key={message.id}
+              className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+            >
+              <div
+                className={`rounded-xl p-4 md:p-5 ${message.role === "user" ? "max-w-xl bg-[#001b3d] text-white" : "w-full bg-white border border-slate-200 text-slate-800"}`}
               >
-                {chip}
-              </button>
-            ))}
-          </div>
-
-          {/* Input Bar */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSend();
-            }}
-            className="relative flex items-center gap-2"
-          >
-            <div className="relative flex-1">
-              <input
-                type="text"
-                value={inputVal}
-                onChange={(e) => setInputVal(e.target.value)}
-                placeholder="Ask about SST anomalies, chlorophyll levels, fishing effort, or ARGO float telemetry..."
-                className="w-full bg-[#f7f9fb] border border-[#c4c6cf] rounded py-3 pl-4 pr-12 text-sm text-[#191c1e] placeholder:text-[#74777f] focus:outline-none focus:border-[#00BFFF] focus:bg-white transition-colors"
-              />
-              <button
-                type="button"
-                onClick={() => setMessages(INITIAL_CHAT_MESSAGES)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#74777f] hover:text-[#001b3d] text-[18px]"
-                title="Reset Chat"
-              >
-                <span className="material-symbols-outlined">restart_alt</span>
+                <div
+                  className={`mb-2 text-[10px] uppercase tracking-wider font-semibold ${message.role === "user" ? "text-sky-200" : "text-slate-500"}`}
+                >
+                  {message.role === "user" ? "You" : "Atlas"}
+                  {message.result
+                    ? ` | ${message.result.mode === "model" ? "Cited synthesis" : "Retrieved evidence"} | ${message.result.status.replaceAll("_", " ")}`
+                    : ""}
+                </div>
+                <p
+                  className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${message.error ? "text-red-800" : ""}`}
+                >
+                  {message.content}
+                </p>
+                {message.result && <ChatEvidence result={message.result} />}
+              </div>
+            </article>
+          ))}
+          {busy && (
+            <div
+              className="flex items-center gap-3 text-sm text-slate-600"
+              role="status"
+            >
+              <span className="material-symbols-outlined animate-spin text-[#008ebe]">
+                progress_activity
+              </span>
+              Planning and retrieving supporting evidence...
+              <button onClick={cancel} className="ml-auto text-xs underline">
+                Cancel
               </button>
             </div>
-
-            <button
-              type="submit"
-              disabled={!inputVal.trim()}
-              className={`bg-[#001b3d] text-white p-3 rounded flex items-center justify-center hover:bg-[#002d66] transition-colors shadow-xs active:scale-[0.98] cursor-pointer ${
-                !inputVal.trim() ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-              title="Send Message"
-            >
-              <span className="material-symbols-outlined text-[20px] text-[#00BFFF]">send</span>
-            </button>
-          </form>
+          )}
+          <div ref={end} />
         </div>
       </div>
+      <footer className="shrink-0 border-t border-slate-200 bg-white p-4 md:px-8">
+        <form
+          className="max-w-4xl mx-auto"
+          onSubmit={(event) => {
+            event.preventDefault();
+            send();
+          }}
+        >
+          <div className="flex items-end gap-3">
+            <label className="flex-1">
+              <span className="sr-only">Ask Atlas</span>
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                rows={2}
+                maxLength={2000}
+                placeholder="Ask about ocean data or scientific evidence..."
+                className="w-full resize-none rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm focus:outline-none focus:border-[#008ebe]"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    send();
+                  }
+                }}
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={busy || !input.trim()}
+              className="mb-1 bg-[#001b3d] text-white rounded-lg px-5 py-3 text-sm disabled:opacity-40"
+            >
+              Ask
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 mt-2 text-[11px] text-slate-500">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={useLiterature}
+                disabled={!status?.literature_search_configured}
+                onChange={(event) => setUseLiterature(event.target.checked)}
+              />
+              Search OpenAlex abstracts
+              {!status?.literature_search_configured ? " | not configured" : ""}
+            </label>
+            <span>
+              {documents.length
+                ? `${documents.length} selected documents`
+                : "Shared knowledge library"}{" "}
+              | {input.length}/2000
+            </span>
+          </div>
+          {context && (
+            <p className="text-[11px] text-slate-500 mt-1">
+              Follow-up context:{" "}
+              {context.region ||
+                (context.latitude != null
+                  ? `${context.latitude}, ${context.longitude}`
+                  : "no location")}{" "}
+              | {context.parameter || "unspecified parameter"}
+              {context.start_date
+                ? ` | ${context.start_date} to ${context.end_date || "latest"}`
+                : ""}
+            </p>
+          )}
+        </form>
+      </footer>
     </div>
   );
 };

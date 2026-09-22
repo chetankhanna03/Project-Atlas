@@ -51,6 +51,7 @@ export default function App() {
       {/* Modals */}
       <KnowledgeSyncModal
         isOpen={isSyncModalOpen}
+        onOpenChat={() => { setIsSyncModalOpen(false); setActiveTab('floatchat'); }}
         onClose={() => {
           setIsSyncModalOpen(false);
           setIsSyncingGlobal(false);
