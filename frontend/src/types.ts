@@ -6,7 +6,7 @@ export type ActiveTab =
   | 'analytics' 
   | 'map' 
   | 'sources' 
-  | 'about';
+  | 'about' | 'home' | 'biodiversity' | 'fisheries' | 'admin';
 
 export interface Dataset {
   id: string;

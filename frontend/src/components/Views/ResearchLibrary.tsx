@@ -179,9 +179,9 @@ export function ResearchLibrary({
             <label className="sm:col-span-2 flex items-start gap-2">
               <input type="checkbox" name="use_embeddings" />
               <span>
-                Create semantic embeddings. This sends document text to the
-                configured model provider. Otherwise, text stays in the local
-                library for keyword retrieval.
+                Create semantic embeddings when using the legacy hybrid engine.
+                OKF mode skips embeddings and indexes passages locally. In hybrid
+                mode, the configured embedding provider may process document text.
               </span>
             </label>
             <p className="sm:col-span-2 text-slate-500">

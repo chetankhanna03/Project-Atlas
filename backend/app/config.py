@@ -19,11 +19,15 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     ollama_base_url: str = 'http://127.0.0.1:11434'
     embedding_model: str = 'gemini-embedding-001'
+    knowledge_retrieval: Literal['okf', 'hybrid'] = 'okf'
     embedding_provider: Literal['auto', 'local', 'gemini', 'ollama', 'disabled'] = 'auto'
     llm_timeout_seconds: float = Field(35, ge=1, le=120)
     ai_timeout_seconds: float = Field(100, ge=1, le=240)
     ai_max_concurrent: int = Field(4, ge=1, le=16)
     rag_max_chunks: int = Field(5000, ge=1, le=50000)
+    development_mode: bool = False
+    rerank_min_score: float = Field(0.62, ge=0, le=1)
+    rerank_score_margin: float = Field(0.10, ge=0, le=1)
     openalex_api_key: str | None = None
     openalex_enabled: bool = False
     neo4j_uri: str | None = None

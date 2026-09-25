@@ -24,7 +24,7 @@ NETCDF_LOCK = threading.Lock()  # netCDF C library is not thread-safe.
 PROFILE_PATH = re.compile(r'[a-z0-9_]+/([0-9]{5,8})/profiles/[RD]\1_[0-9]+[AD]?\.nc\Z')
 
 
-def select_profiles(bounds, start, end, limit):
+def select_profiles(bounds, start, end, limit, offset=0):
     validate_bbox(*bounds)
     if not INDEX_PATH.exists():
         raise HTTPException(503, 'ARGO index missing. Run python -m app.services.sync_argo_index from backend/.')
@@ -35,8 +35,11 @@ def select_profiles(bounds, start, end, limit):
             metadata = dict(db.execute('SELECT key,value FROM metadata').fetchall())
             rows = db.execute('''SELECT * FROM profiles WHERE latitude BETWEEN ? AND ?
                 AND longitude BETWEEN ? AND ? AND date BETWEEN ? AND ?
-                ORDER BY date DESC, file LIMIT ?''',
-                (s, n, w, e, start.strftime('%Y%m%d')+'000000', end.strftime('%Y%m%d')+'235959', limit+1)).fetchall()
+                ORDER BY date DESC, file LIMIT ? OFFSET ?''',
+                (s, n, w, e, start.strftime('%Y%m%d')+'000000', end.strftime('%Y%m%d')+'235959', limit+1, offset)).fetchall()
+            metadata['matching_files'] = db.execute('''SELECT COUNT(*) FROM profiles WHERE latitude BETWEEN ? AND ?
+                AND longitude BETWEEN ? AND ? AND date BETWEEN ? AND ?''',
+                (s,n,w,e,start.strftime('%Y%m%d')+'000000',end.strftime('%Y%m%d')+'235959')).fetchone()[0]
         return [dict(row) for row in rows[:limit]], len(rows) > limit, metadata
     except sqlite3.Error:
         raise HTTPException(503, 'ARGO index unavailable; rebuild it with python -m app.services.sync_argo_index.')
@@ -127,7 +130,7 @@ async def fetch_profile(path):
 
 
 async def get_profiles(bounds, start=None, end=None, parameter='temperature', limit=3,
-                       pressure_min=0.0, pressure_max=2000.0):
+                       pressure_min=0.0, pressure_max=2000.0, offset=0):
     validate_bbox(*bounds)
     if parameter not in ('temperature','salinity') or not 1 <= limit <= 5:
         raise HTTPException(422, 'Choose temperature or salinity and 1-5 profiles.')
@@ -137,9 +140,9 @@ async def get_profiles(bounds, start=None, end=None, parameter='temperature', li
     start = start or end - timedelta(days=30)
     if start > end:
         raise HTTPException(422, 'Use start <= end.')
-    selected, truncated, metadata = await run_in_threadpool(select_profiles, bounds, start, end, limit)
+    selected, truncated, metadata = await run_in_threadpool(select_profiles, bounds, start, end, limit, offset)
     key = get_cache_key('argo-gdac', {'bbox': bounds, 'start': str(start), 'end': str(end),
-        'parameter': parameter, 'limit': limit, 'pressure': [pressure_min,pressure_max], 'index': metadata})
+        'parameter': parameter, 'limit': limit, 'offset': offset, 'pressure': [pressure_min,pressure_max], 'index': metadata})
     cached = get_cached(key)
     if cached:
         cached['cached'] = True
@@ -163,16 +166,18 @@ async def get_profiles(bounds, start=None, end=None, parameter='temperature', li
     limitations = ['Core Argo vertical profiles, not satellite SST or regional means.',
         'Only QC=1 position, time, pressure and measurement values are retained. A/D modes use adjusted values; R uses raw values.',
         'Pressure is in dbar, not depth in metres. At most 100 sampled levels per profile.',
-        'Newest matching files are sampled; this is not exhaustive coverage. Missing dates default to a 30-day window ending at the supplied end date or today.']
+        'Matching indexed files are paginated newest first. Matching file totals precede quality filtering. Missing dates default to a 30-day window ending at the supplied end date or today.']
     if truncated:
-        limitations.append(f'Profile download cap reached ({limit} files); narrow the region or dates for a different sample.')
+        limitations.append(f'More matching files are available. Load the next page ({limit} files per request).')
     if datetime.now(timezone.utc) - datetime.fromisoformat(metadata['retrieved_at']) > timedelta(days=2):
         limitations.append('Local ARGO index is over two days old; refresh it to discover newer or revised profiles.')
     result = {'source': 'Argo GDAC / Coriolis', 'status': ('partial' if profiles else 'unavailable') if errors else ('ok' if profiles else 'no_data'),
               'profiles': profiles, 'errors': errors, 'limitations': limitations, 'cached': False,
               'query': {'bbox': bounds, 'start': str(start), 'end': str(end), 'parameter': parameter,
                         'pressure_min_dbar': pressure_min, 'pressure_max_dbar': pressure_max},
-              'index': metadata, 'doi': 'https://doi.org/10.17882/42182'}
+              'index': metadata, 'doi': 'https://doi.org/10.17882/42182',
+              'matching_files': metadata['matching_files'], 'files_scanned': len(selected),
+              'next_offset': offset + len(selected) if truncated else None}
     if not errors:
         put_cached(key, result, settings.cache_ttl_seconds)
     return result

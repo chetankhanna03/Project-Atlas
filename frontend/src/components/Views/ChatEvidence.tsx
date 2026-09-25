@@ -124,6 +124,12 @@ export function ChatEvidence({ result }: { result: ChatResponse }) {
           </span>
         ))}
       </div>
+      {import.meta.env.DEV && result.diagnostics && (
+        <details className="mt-4 text-xs">
+          <summary className="cursor-pointer font-semibold">Retrieval diagnostics (development)</summary>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words mt-2">{JSON.stringify(result.diagnostics, null, 2)}</pre>
+        </details>
+      )}
       {result.visualizations.map((view, index) => (
         <DataView key={index} view={view} />
       ))}

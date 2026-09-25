@@ -94,8 +94,11 @@ async def get_sst(lat, lon, days=7):
             'query': {'latitude': lat, 'longitude': lon, 'latest_available_days': days},
             'limitations': ['Nearest grid cell; latest available observations may lag today. Recent values may be revised.']}
 
-async def get_obis(bounds, limit=100, species=None):
+async def get_obis(bounds, limit=100, species=None, after=None):
     params = {'geometry': polygon_wkt(bounds), 'size': limit}
+    params['total'] = 'true'
+    if after is not None:
+        params['after'] = after
     if species:
         params['scientificname'] = species
     data, provenance = await request_json('OBIS', OBIS, params)
@@ -119,7 +122,9 @@ async def get_obis(bounds, limit=100, species=None):
                         'dataset': 'OBIS', 'license': record.get('license')})
     return {'status': 'ok' if results else 'no_data', 'count': len(results), 'results': results,
             'provenance': provenance, 'limit': limit,
-            'limitations': ['Bounded occurrence sample, not an abundance estimate or complete species inventory.']}
+            'total_matching': data.get('total') if isinstance(data.get('total'), int) and data['total'] >= 0 else None,
+            'next_cursor': str(results[-1]['record_id']) if len(results) == limit and results[-1]['record_id'] is not None and str(results[-1]['record_id']) != after else None,
+            'limitations': ['Paginated occurrence records, not an abundance estimate or complete species inventory. Date filters are not applied to this source.']}
 
 async def get_taxonomy(name, refresh=False):
     data, provenance = await request_json('WoRMS', WORMS + '/' + quote(name, safe=''),

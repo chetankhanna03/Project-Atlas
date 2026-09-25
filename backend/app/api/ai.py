@@ -12,6 +12,8 @@ from app.database import SessionLocal
 from app.ai.models import ResearchDocument, ResearchChunk
 from app.ai.schemas import ChatRequest, ChatResponse, DocumentInput
 from app.ai import engine, provider, rag, knowledge
+from app.ai import okf
+from fastapi.responses import Response
 
 router = APIRouter(prefix='/api', tags=['AI / FloatChat'])
 _active = 0
@@ -20,6 +22,7 @@ _active = 0
 @router.get('/ai/status')
 def ai_status():
     return {'provider': settings.llm_provider, 'model': settings.llm_model,
+            'knowledge_retrieval': settings.knowledge_retrieval, 'okf_version': '0.2',
             'model_configured': provider.model_enabled(), 'embedding_model': settings.embedding_model,
             'embedding_provider': provider.embedding_provider(), 'embeddings_configured': provider.embeddings_enabled(),
             'embedding_dimensions': provider.DIMENSIONS, 'orchestrator': 'langgraph',
@@ -47,6 +50,20 @@ async def chat(request: ChatRequest):
 def documents():
     records = rag.list_documents()
     return {'count': len(records), 'documents': records, 'scope': 'shared curated library'}
+
+
+@router.get('/research/okf')
+def knowledge_bundle_status():
+    entries = okf.concepts()
+    return {'format': 'OKF', 'version': '0.2', 'retrieval': settings.knowledge_retrieval,
+            'concepts': len(entries), 'documents': len({e['metadata']['atlas']['document_id'] for e in entries}),
+            'embeddings_required': False, 'human_verified': False}
+
+
+@router.get('/research/okf/bundle')
+def export_knowledge_bundle():
+    return Response(okf.bundle(), media_type='application/zip',
+                    headers={'Content-Disposition': 'attachment; filename="atlas-okf.zip"'})
 
 
 @router.post('/research/documents', status_code=201, dependencies=[Depends(require_admin)])

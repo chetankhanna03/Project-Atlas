@@ -22,7 +22,7 @@ import "leaflet/dist/leaflet.css";
 import { MapAreaSelection, validArea, type Area } from "./MapAreaSelection";
 import { safeSourceUrl } from "../../services/atlas";
 
-type Layer = "argo" | "obis" | "sst" | "gfw";
+type Layer = "argo" | "obis" | "sst" | "gfw" | "copernicus";
 type Result = { layer: Layer; data?: any; error?: string };
 type Point = {
   lat: number;
@@ -55,24 +55,28 @@ const initial: Query = {
   species: "",
   layers: ["argo", "obis"],
 };
-let saved: { query: Query; results: Result[]; loaded: string } | null = null;
+export type OceanSnapshot = { query: Query; results: Result[]; loaded: string };
+let saved: OceanSnapshot | null = null;
 const names: Record<Layer, string> = {
   argo: "ARGO profiles",
   obis: "OBIS occurrences",
   sst: "Satellite SST",
   gfw: "Fishing effort",
+  copernicus: "Copernicus Marine",
 };
 const colors = {
   argo: "#0e7490",
   obis: "#7c3aed",
   sst: "#d97706",
   gfw: "#e11d48",
+  copernicus: "#2563eb",
 };
 
 export async function loadLayer(
   layer: Layer,
   q: Query,
   signal: AbortSignal,
+  cursor?: string | number,
 ): Promise<Result> {
   const box = [q.west, q.south, q.east, q.north].join(",");
   const p = new URLSearchParams({ bbox: box, start: q.start, end: q.end });
@@ -80,14 +84,23 @@ export async function loadLayer(
   if (layer === "argo") {
     p.set("parameter", q.parameter);
     p.set("limit", "3");
+    if (cursor != null) p.set("offset", String(cursor));
     path = "/oceanography/argo/gdac";
   }
   if (layer === "obis") {
     p.delete("start");
     p.delete("end");
     p.set("limit", "100");
+    if (cursor != null) p.set("after", String(cursor));
     if (q.species.trim()) p.set("species", q.species.trim());
     path = "/biodiversity/obis";
+  }
+  if (layer === "copernicus") {
+    p.delete("bbox");
+    p.set("latitude", String((q.south + q.north) / 2));
+    p.set("longitude", String((q.west + q.east) / 2));
+    p.set("parameter", q.parameter);
+    path = "/oceanography/copernicus";
   }
   if (layer === "gfw") path = "/fisheries/effort";
   if (layer === "sst") {
@@ -202,8 +215,12 @@ function Series({
 export function OceanWorkspace({
   mode = "dashboard",
   onAskAtlas,
+  onSnapshot,
+  domain,
 }: {
   mode?: "dashboard" | "map" | "analytics";
+  onSnapshot?: (snapshot: OceanSnapshot) => void;
+  domain?: string;
   onAskAtlas?: (question: string, scope: Scope) => void;
 }) {
   const [q, setQ] = useState<Query>(saved?.query || initial),
@@ -212,7 +229,28 @@ export function OceanWorkspace({
     [loaded, setLoaded] = useState(saved?.loaded || "");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [visible, setVisible] = useState<Layer[]>(["argo", "obis", "sst", "gfw"]);
+    [visible, setVisible] = useState<Layer[]>([
+      "argo",
+      "obis",
+      "sst",
+      "gfw",
+      "copernicus",
+    ]);
+  useEffect(() => {
+    if (loaded) onSnapshot?.({ query: applied, results, loaded });
+  }, [loaded, results, applied, onSnapshot]);
+  useEffect(() => {
+    if (domain)
+      setQ((previous) => ({
+        ...previous,
+        layers:
+          domain === "biodiversity"
+            ? ["obis"]
+            : domain === "fisheries"
+              ? ["gfw", "sst"]
+              : ["argo", "sst"],
+      }));
+  }, [domain]);
   const controller = useRef<AbortController | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [areaMethod, setAreaMethod] = useState("");
@@ -250,6 +288,36 @@ export function OceanWorkspace({
   }
   const update = (key: keyof Query, value: any) =>
     setQ((prev) => ({ ...prev, [key]: value }));
+  async function loadMore(layer: Layer) {
+    if (busy) return;
+    const old = results.find(r => r.layer === layer)?.data;
+    const cursor = layer === "obis" ? old?.next_cursor : old?.next_offset;
+    if (cursor == null) return;
+    const current = new AbortController();
+    controller.current = current;
+    const timer = setTimeout(() => current.abort(), 65000);
+    setBusy(true); setError("");
+    try {
+      const page = await loadLayer(layer, applied, current.signal, cursor);
+      if (current.signal.aborted) return;
+      if (page.error) throw new Error(page.error);
+      const key = layer === "obis" ? "results" : "profiles";
+      const unique = new Map();
+      for (const row of [...(old[key] || []), ...(page.data[key] || [])]) {
+        const id = layer === "obis" ? row.record_id ?? JSON.stringify(row) : [row.url,row.float_id,row.cycle,row.time].join("|");
+        unique.set(id,row);
+      }
+      const data = {...page.data, [key]: [...unique.values()],
+        status: unique.size ? (page.data.errors?.length ? "partial" : "ok") : page.data.status,
+        errors: [...(old.errors || []), ...(page.data.errors || [])],
+        files_scanned: (old.files_scanned || 0) + (page.data.files_scanned || 0)};
+      const next = results.map(r => r.layer === layer ? {layer,data} : r);
+      const time = new Date().toISOString();
+      setResults(next); setLoaded(time);
+      saved = {query: applied, results: next, loaded: time};
+    } catch (e) { if (controller.current === current) setError(e instanceof Error ? e.message : "Could not load more records."); }
+    finally { clearTimeout(timer); if (controller.current === current) setBusy(false); }
+  }
   async function refresh() {
     if (
       ![q.west, q.south, q.east, q.north].every(Number.isFinite) ||
@@ -364,6 +432,26 @@ export function OceanWorkspace({
         })),
       });
     }
+    if (result.layer === "copernicus" && d.results?.length) {
+      const first = d.results[0];
+      if (visible.includes("copernicus"))
+        points.push({
+          lat: first.latitude,
+          lon: first.longitude,
+          label: "Copernicus model grid cell",
+          detail: `${first.time} | model estimate, not in-situ`,
+          source: d.provenance?.url,
+          color: colors.copernicus,
+        });
+      for (const variable of Object.keys(d.units || {}))
+        series.push({
+          title: `Copernicus ${variable}`,
+          unit: d.units[variable] || "not supplied",
+          rows: d.results
+            .filter((r: any) => Number.isFinite(r[variable]))
+            .map((r: any) => ({ x: r.time.slice(0, 10), y: r[variable] })),
+        });
+    }
     if (result.layer === "gfw" && d.results?.length) {
       const daily: Record<string, number> = {};
       for (const p of d.results)
@@ -437,6 +525,7 @@ export function OceanWorkspace({
             {[
               ["Arabian Sea", 50, 5, 78, 25],
               ["Bay of Bengal", 80, 5, 100, 23],
+              ["Indian Ocean", 40, -40, 110, 25],
             ].map(([name, w, s, e, n]) => (
               <button
                 key={name}
@@ -582,6 +671,17 @@ export function OceanWorkspace({
                   )}
                 </span>
                 <span className="source-option-copy">
+                  <small>
+                    {
+                      {
+                        argo: "OCEANOGRAPHY",
+                        sst: "OCEANOGRAPHY",
+                        copernicus: "OCEANOGRAPHY",
+                        gfw: "FISHERIES",
+                        obis: "BIODIVERSITY",
+                      }[layer]
+                    }
+                  </small>
                   {names[layer]}
                   <small>
                     {
@@ -590,6 +690,7 @@ export function OceanWorkspace({
                         obis: "Recorded marine life",
                         sst: "Surface temperature",
                         gfw: "Apparent fishing activity",
+                        copernicus: "Model analysis / forecast",
                       }[layer]
                     }
                   </small>
@@ -629,6 +730,11 @@ export function OceanWorkspace({
               vessel positions.
             </p>
           </details>
+          <p className="query-description">
+            Molecular samples and otolith specimens are available under
+            Biodiversity. Indian Ocean bounds are a coarse region, not an Indian
+            EEZ boundary.
+          </p>
           <div className="query-footnote">
             <span /> Real sources. Visible limitations.
           </div>
@@ -707,11 +813,17 @@ export function OceanWorkspace({
                   r.data &&
                   r.data.status !== "unavailable" && (
                     <p className="text-xs text-slate-600 mt-2">
-                      Up to 100 records per query. This is a limited sample, not
-                      the total occurrences or number of fish in the selected
-                      area.
+                      {r.data.total_matching != null ? `${r.data.total_matching.toLocaleString()} matching occurrences reported by OBIS.` : "Total matching occurrences not supplied by OBIS."}
+                      {" "}100 records per page; load more below. Occurrences are not fish abundance.
                     </p>
                   )}
+                {r.layer === "argo" && r.data && <p className="text-xs text-slate-600 mt-2">
+                  {r.data.files_scanned ?? 0} files inspected of {r.data.matching_files ?? "unknown"} matching indexed files. Profiles shown passed quality filters. Three files per page; index coverage is not the number of quality-approved profiles.
+                </p>}
+                {r.data && (r.data.next_cursor != null || r.data.next_offset != null) &&
+                  <button className="atlas-primary mt-3" disabled={busy || dirty} onClick={() => loadMore(r.layer)}>
+                    Load more {r.layer === "obis" ? "OBIS records" : "ARGO profiles"}
+                  </button>}
                 {r.error && <p className="text-xs mt-2">{r.error}</p>}
                 {r.data && (
                   <details className="text-xs mt-2">
@@ -790,7 +902,7 @@ export function OceanWorkspace({
                 </label>
               ))}
               <span className="ml-auto">
-                {points.length} returned locations
+                {Math.min(points.length, 2000)} of {points.length} loaded locations mapped
               </span>
             </div>
             <div
@@ -838,7 +950,7 @@ export function OceanWorkspace({
                     }}
                   />
                 )}
-                {points.map((p, i) => (
+                {points.slice(0, 2000).map((p, i) => (
                   <CircleMarker
                     key={i}
                     center={[p.lat, p.lon]}

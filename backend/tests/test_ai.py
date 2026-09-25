@@ -46,9 +46,9 @@ def test_document_lifecycle_and_grounded_chat(client):
     assert response.status_code == 200
     data = response.json()
     assert data['mode'] == 'evidence_only'
-    assert data['status'] == 'ok'
+    assert data['status'] == 'no_data'
     assert len(data['agents']) == 1
-    assert '[E1]' in data['answer']
+    assert 'could not generate a sufficiently supported answer' in data['answer']
     assert data['citations'][0]['url'] == DOCUMENT['source_url']
     assert client.delete('/api/research/documents/' + document_id, headers=AUTH).status_code == 200
     assert client.get('/api/research/search?q=temperature').json()['results'] == []

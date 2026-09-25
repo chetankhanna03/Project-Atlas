@@ -7,14 +7,14 @@ from app.config import settings
 from app.database import engine
 from app.middleware import RateLimitMiddleware
 from app.api import argo, fisheries, biodiversity, oceanography, erddap, taxonomy, protected_areas, search, cache, datasets, ai
-from app.api import integrations, source_status
+from app.api import integrations, source_status, science
 
 app = FastAPI(title='Project Atlas API', description='Grounded ocean intelligence and scientific retrieval', version='0.3.0')
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                    allow_methods=['GET', 'POST', 'PUT', 'DELETE'],
                    allow_headers=['Content-Type', 'X-API-Key'])
-for module in (argo, fisheries, biodiversity, oceanography, erddap, taxonomy, protected_areas, search, cache, datasets, ai, integrations, source_status):
+for module in (argo, fisheries, biodiversity, oceanography, erddap, taxonomy, protected_areas, search, cache, datasets, ai, integrations, source_status, science):
     app.include_router(module.router)
 
 @app.exception_handler(SQLAlchemyError)

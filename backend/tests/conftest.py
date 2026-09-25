@@ -30,6 +30,11 @@ def client(monkeypatch, tmp_path):
         monkeypatch.setattr(module, 'SessionLocal', sessions)
     from app.config import settings
     monkeypatch.setattr(settings, 'llm_provider', 'disabled')
+    monkeypatch.setattr(settings, 'knowledge_retrieval', 'hybrid')
+    monkeypatch.setattr(settings, 'development_mode', False)
+    from app.ai import rerank
+    # Deterministic semantic service stub; dedicated reranker tests exercise selection.
+    monkeypatch.setattr(rerank, 'semantic_scores', lambda query, items: [(0.9,0.9) for item in items])
     monkeypatch.setattr(settings,'embedding_provider','auto')
     monkeypatch.setattr(settings,'openrouter_api_key',None)
     for key in ('gfw_api_key','iucn_api_key','copernicusmarine_service_username','copernicusmarine_service_password','openalex_api_key'):
@@ -38,6 +43,13 @@ def client(monkeypatch, tmp_path):
     import app.main as main
     monkeypatch.setattr(main, 'engine', engine)
     clear_cache()
+    # Each test gets an independent request budget, like an independent client.
+    from app.middleware import RateLimitMiddleware
+    middleware = app.middleware_stack
+    while middleware is not None:
+        if isinstance(middleware, RateLimitMiddleware):
+            middleware.clients.clear()
+        middleware = getattr(middleware, 'app', None)
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()

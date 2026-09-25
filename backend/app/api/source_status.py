@@ -23,7 +23,12 @@ def sources():
         elif item['access']=='local-import':
             status='requires_import'
         entries.append({**item,'status':status,'required_settings':required})
-    for identifier,name in [('incois','INCOIS'),('edna','eDNA repositories'),('fishbase','FishBase'),('wdpa','Protected Planet / WDPA')]:
+    for identifier,name in [('edna','eDNA sample register'),('otolith','Otolith specimen register')]:
+        entries.append({'id':identifier,'name':name,'domain':'molecular' if identifier=='edna' else 'morphology',
+                        'source':'User-supplied validated metadata','access':'local-import', 'status':'requires_import',
+                        'required_settings':['ADMIN_API_KEY'], 'endpoint':f'/api/science/records/{identifier}',
+                        'limitations':'Validated storage and reported annotations only. No automated species matching or classification.'})
+    for identifier,name in [('incois','INCOIS'),('fishbase','FishBase'),('wdpa','Protected Planet / WDPA')]:
         entries.append({'id':identifier,'name':name,'domain':'pending','source':name,'access':'not_connected',
                         'status':'needs_product_selection','required_settings':[],
                         'limitations':'Choose a specific dataset/service and confirm its access contract. No generic connector is active.'})

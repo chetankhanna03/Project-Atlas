@@ -98,7 +98,9 @@ async def ingest(metadata: DocumentInput, pages=None):
     if existing:
         return {**existing, 'limitations': ['Existing document preserved. Use reindex to rebuild its embeddings.']}
     vectors, warnings = [], []
-    if metadata.use_embeddings and provider.embeddings_enabled():
+    if settings.knowledge_retrieval == 'okf':
+        warnings.append('Indexed for OKF knowledge retrieval; embeddings are not required.')
+    elif metadata.use_embeddings and provider.embeddings_enabled():
         try:
             for start in range(0, len(chunks), 32):
                 vectors.extend(await provider.embed([text for _, text in chunks[start:start+32]]))
@@ -108,7 +110,7 @@ async def ingest(metadata: DocumentInput, pages=None):
     else:
         warnings.append('Document indexed for lexical retrieval; embeddings were not requested or no model is configured.')
     result = await run_in_threadpool(save_document, metadata, chunks, vectors)
-    return {**result, 'limitations': warnings}
+    return {**result, 'retrieval_mode': 'okf' if settings.knowledge_retrieval == 'okf' else result['retrieval_mode'], 'limitations': warnings}
 
 
 def retrieve(query, document_ids, vector, limit=6):
@@ -157,7 +159,7 @@ def retrieve(query, document_ids, vector, limit=6):
         for chunk_id in sorted(scores, key=lambda key: (-scores[key], key)):
             chunk = candidates[chunk_id]
             document_key = chunk.document.doi or chunk.document_id
-            if per_document[document_key] >= 2:
+            if per_document[document_key] >= (8 if limit > 6 else 2):
                 continue
             per_document[document_key] += 1
             doc = chunk.document
@@ -172,6 +174,9 @@ def retrieve(query, document_ids, vector, limit=6):
 
 
 async def search(query, document_ids=None, limit=6):
+    if settings.knowledge_retrieval == 'okf':
+        from app.ai import okf
+        return await okf.search(query, document_ids, limit)
     vector, warnings = None, []
     def has_chunks():
         with SessionLocal() as db:

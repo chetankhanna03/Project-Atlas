@@ -75,6 +75,7 @@ class Evidence(StrictModel):
 
 
 class AgentResult(StrictModel):
+    retrieval_diagnostics: list[dict] = Field(default_factory=list)
     domain: Domain
     status: Literal['ok', 'partial', 'no_data', 'unavailable', 'needs_input', 'unsupported']
     evidence: list[Evidence] = Field(default_factory=list)
@@ -93,6 +94,7 @@ class GeneratedAnswer(StrictModel):
 
 
 class ChatResponse(StrictModel):
+    diagnostics: dict | None = None
     request_id: str
     status: Literal['ok', 'partial', 'no_data', 'needs_input', 'unavailable']
     answer: str

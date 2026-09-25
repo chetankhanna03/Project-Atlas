@@ -19,7 +19,7 @@ CATALOG = [
      'source': 'Coriolis GDAC', 'access': 'on-demand', 'endpoint': '/api/oceanography/argo/gdac',
      'source_url': 'https://data-argo.ifremer.fr/', 'doi': 'https://doi.org/10.17882/42182',
      'variables': ['temperature', 'salinity', 'pressure'],
-     'limitations': 'Requires local metadata index refresh; at most 5 files and 100 sampled levels per profile. QC=1 only. Local imports remain at /api/oceanography/argo.'},
+     'limitations': 'Requires local metadata index refresh; pages contain at most 5 files, with 100 sampled levels per profile. Continue via next_offset. QC=1 only. Local imports remain at /api/oceanography/argo.'},
     {'id': 'fisheries', 'name': 'Locally imported fisheries landings', 'domain': 'fisheries',
      'source': 'User-supplied records', 'access': 'local-import', 'endpoint': '/api/fisheries/landings',
      'limitations': 'Empty until imported; not live GFW vessel activity. Verify provenance of imported rows.'},

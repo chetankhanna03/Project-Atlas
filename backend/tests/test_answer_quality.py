@@ -50,5 +50,5 @@ def test_invalid_draft_is_repaired_without_weakening_checks(client, monkeypatch)
     result = asyncio.run(engine.synthesize(ChatRequest(message='How does temperature affect fish?'),
         Plan(domains=['research']), [AgentResult(domain='research', status='ok', evidence=[evidence])]))
     assert result.mode == 'model'
-    assert len(calls) == 2
+    assert len(calls) == 1  # Valid inline citations normalize without a wasteful repair.
     assert result.answer.count('[E1]') == 1

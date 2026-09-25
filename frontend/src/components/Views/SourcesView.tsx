@@ -22,6 +22,7 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
   onSyncClick,
 }) => {
   const [sources, setSources] = useState<SourceInfo[]>([]);
+  const [filter, setFilter] = useState("");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -78,44 +79,60 @@ export const SourcesView: React.FC<SourcesViewProps> = ({
             {error}
           </p>
         )}
+        <label className="domain-form">
+          Find datasets by name or domain
+          <input
+            aria-label="Find datasets"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Oceanography, OBIS, molecular..."
+            className="border rounded-lg p-3 bg-white"
+          />
+        </label>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {sources.map((source) => (
-            <article
-              key={source.id}
-              className="bg-white border rounded p-5 space-y-3"
-            >
-              <div className="flex flex-wrap justify-between gap-2">
-                <h2 className="font-bold text-[#001b3d]">{source.name}</h2>
-                <span className="text-xs bg-slate-100 rounded px-2 py-1">
-                  {labels[source.status] || source.status}
-                </span>
-              </div>
-              <p className="text-xs uppercase text-slate-500">
-                {source.domain} | {source.access.replaceAll("_", " ")}
-              </p>
-              <p className="text-sm text-slate-700">{source.limitations}</p>
-              {source.endpoint && (
-                <code className="block text-xs break-all">
-                  {source.endpoint}
-                </code>
-              )}
-              {source.required_settings.length > 0 && (
-                <p className="text-xs text-slate-600 break-words">
-                  Backend settings: {source.required_settings.join(", ")}
+          {sources
+            .filter((s) =>
+              (s.name + " " + s.domain)
+                .toLowerCase()
+                .includes(filter.toLowerCase()),
+            )
+            .map((source) => (
+              <article
+                key={source.id}
+                className="bg-white border rounded p-5 space-y-3"
+              >
+                <div className="flex flex-wrap justify-between gap-2">
+                  <h2 className="font-bold text-[#001b3d]">{source.name}</h2>
+                  <span className="text-xs bg-slate-100 rounded px-2 py-1">
+                    {labels[source.status] || source.status}
+                  </span>
+                </div>
+                <p className="text-xs uppercase text-slate-500">
+                  {source.domain} | {source.access.replaceAll("_", " ")}
                 </p>
-              )}
-              {safeSourceUrl(source.source_url) && (
-                <a
-                  href={safeSourceUrl(source.source_url)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-blue-700 underline"
-                >
-                  Provider website
-                </a>
-              )}
-            </article>
-          ))}
+                <p className="text-sm text-slate-700">{source.limitations}</p>
+                {source.endpoint && (
+                  <code className="block text-xs break-all">
+                    {source.endpoint}
+                  </code>
+                )}
+                {source.required_settings.length > 0 && (
+                  <p className="text-xs text-slate-600 break-words">
+                    Backend settings: {source.required_settings.join(", ")}
+                  </p>
+                )}
+                {safeSourceUrl(source.source_url) && (
+                  <a
+                    href={safeSourceUrl(source.source_url)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-700 underline"
+                  >
+                    Provider website
+                  </a>
+                )}
+              </article>
+            ))}
         </div>
         <div className="flex gap-4 pb-6">
           <button

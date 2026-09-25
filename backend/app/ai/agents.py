@@ -260,7 +260,7 @@ async def research(plan, request):
             **provenance_values(data['provenance'])) for i,row in enumerate(data['results'][:5])]
         return AgentResult(domain='research',status=data['status'],evidence=evidence,limitations=data['limitations'])
     try:
-        evidence, mode, warnings = await rag.search(plan.research_query or request.message, request.document_ids)
+        evidence, mode, warnings = await rag.search(plan.research_query or request.message, request.document_ids, limit=32)
     except SQLAlchemyError:
         evidence, warnings = [], ['Curated document database unavailable; initialize the research tables before importing papers.']
     if not request.document_ids:
@@ -280,7 +280,11 @@ async def research(plan, request):
             warnings.append(str(exc))
     if not evidence:
         warnings.append('No relevant passages found. Import permitted scientific documents into the knowledge library or configure literature search.')
-    return AgentResult(domain='research', status='ok' if evidence else 'no_data', evidence=evidence[:10], limitations=warnings)
+    from app.ai.rerank import rerank
+    from app.ai.planner import effective_question
+    evidence, diagnostics, notes = await rerank(effective_question(request), evidence)
+    return AgentResult(domain='research', status='ok' if evidence else 'no_data', evidence=evidence,
+                       retrieval_diagnostics=diagnostics if settings.development_mode else [], limitations=warnings + notes)
 
 
 AGENTS = {'ocean': ocean, 'fisheries': fisheries, 'biodiversity': biodiversity, 'research': research}

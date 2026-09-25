@@ -38,6 +38,7 @@ export interface Visualization {
 }
 
 export interface ChatResponse {
+  diagnostics?: Record<string, unknown> | null;
   request_id: string;
   status: string;
   answer: string;

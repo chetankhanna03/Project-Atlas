@@ -8,9 +8,11 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/api/**', async route => {
       if (/argo\/gdac|biodiversity\/obis|erddap\/sst|fisheries\/effort/.test(route.request().url())) requests.push(new URL(route.request().url()));
-      await route.fulfill({json: {status: 'no_data', profiles: [], results: [], data: [], total_apparent_fishing_hours: 0, limitations: []}});
+      await route.fulfill({json: {sources: [], status: 'no_data', profiles: [], results: [], data: [], total_apparent_fishing_hours: 0, limitations: []}});
     });
     await page.goto('http://127.0.0.1:3000/');
+    if(touch) await page.getByRole('button',{name:'Open Navigation Menu'}).click();
+    await page.getByRole('button',{name:'Explore',exact:true}).click();
     const load = page.getByRole('button', {name: 'Load data', exact: true});
     await expect(load).toBeEnabled();
     await page.getByText('Dates & advanced filters', {exact: true}).click();

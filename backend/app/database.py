@@ -21,6 +21,7 @@ def get_db():
 def init_db():
     from app import models
     from app.ai import models as ai_models
+    from app.api import science
     if engine.dialect.name == 'postgresql':
         with engine.begin() as connection:
             connection.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))

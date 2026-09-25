@@ -10,7 +10,20 @@ import {
   Menu,
   ArrowLeft,
   Globe2,
+  Home,
+  Fish,
+  Ship,
+  Activity,
+  Settings2,
 } from "lucide-react";
+import {
+  Overview,
+  Fisheries,
+  Biodiversity,
+  Analytics,
+  Administration,
+} from "./components/Views/DomainViews";
+import type { OceanSnapshot } from "./components/Views/OceanWorkspace";
 import { OceanWorkspace } from "./components/Views/OceanWorkspace";
 import { FloatChatView } from "./components/Views/FloatChatView";
 import { SourcesView } from "./components/Views/SourcesView";
@@ -20,7 +33,10 @@ import type { Scope } from "./services/atlas";
 import "./atlas.css";
 
 export default function App() {
-  const [tab, setTab] = useState<ActiveTab>("explore");
+  const [tab, setTab] = useState<ActiveTab>("home");
+  const [snapshot, setSnapshot] = useState<OceanSnapshot | null>(null);
+  const [domain, setDomain] = useState("");
+  const [exploreVisited, setExploreVisited] = useState(false);
   const [menu, setMenu] = useState(false);
   const [question, setQuestion] = useState("");
   const [scope, setScope] = useState<Scope | null>(null);
@@ -28,11 +44,9 @@ export default function App() {
   const [library, setLibrary] = useState(false);
   const [documents, setDocuments] = useState<string[]>([]);
   const navigate = (next: ActiveTab) => {
-    setTab(
-      ["dashboard", "map", "analytics", "landing"].includes(next)
-        ? "explore"
-        : next,
-    );
+    setTab(["dashboard", "map", "landing"].includes(next) ? "explore" : next);
+    if (["explore", "dashboard", "map", "landing"].includes(next))
+      setExploreVisited(true);
     if (next === "floatchat") setChatVisited(true);
     setMenu(false);
   };
@@ -41,7 +55,12 @@ export default function App() {
     setScope(context);
     navigate("floatchat");
   };
+  const exploreDomain = (value: string) => {
+    setDomain(value);
+    navigate("explore");
+  };
   const items = [
+    { id: "home", title: "Home", detail: "The connected platform", icon: Home },
     {
       id: "explore",
       title: "Explore",
@@ -55,10 +74,34 @@ export default function App() {
       icon: MessageCircle,
     },
     {
+      id: "analytics",
+      title: "Analytics",
+      detail: "Compare domain evidence",
+      icon: Activity,
+    },
+    {
+      id: "fisheries",
+      title: "Fisheries",
+      detail: "Effort, catch and context",
+      icon: Ship,
+    },
+    {
+      id: "biodiversity",
+      title: "Biodiversity",
+      detail: "Taxonomy, eDNA and otoliths",
+      icon: Fish,
+    },
+    {
       id: "sources",
-      title: "Sources & library",
+      title: "Data catalog",
       detail: "Follow the evidence",
       icon: Layers3,
+    },
+    {
+      id: "admin",
+      title: "Data operations",
+      detail: "Ingestion and knowledge",
+      icon: Settings2,
     },
   ] as const;
   const title = items.find((item) => item.id === tab)?.title || "About Atlas";
@@ -74,7 +117,7 @@ export default function App() {
       <aside className={`atlas-sidebar ${menu ? "is-open" : ""}`}>
         <button
           className="atlas-brand"
-          onClick={() => navigate("explore")}
+          onClick={() => navigate("home")}
           aria-label="Atlas home"
         >
           <span className="brand-mark">
@@ -155,9 +198,47 @@ export default function App() {
           </button>
         </header>
         <main className="atlas-canvas">
-          <div hidden={tab !== "explore"} className="atlas-screen">
-            <OceanWorkspace mode="map" onAskAtlas={ask} />
-          </div>
+          {tab === "home" && (
+            <Overview
+              snapshot={snapshot}
+              onExplore={(value) =>
+                value === "biodiversity"
+                  ? navigate("biodiversity")
+                  : exploreDomain(value)
+              }
+              onAsk={() => navigate("floatchat")}
+            />
+          )}
+          {exploreVisited && (
+            <div hidden={tab !== "explore"} className="atlas-screen">
+              <OceanWorkspace
+                mode="map"
+                onAskAtlas={ask}
+                onSnapshot={setSnapshot}
+                domain={domain}
+              />
+            </div>
+          )}
+          {tab === "analytics" && (
+            <Analytics
+              snapshot={snapshot}
+              onExplore={() => exploreDomain("fisheries")}
+            />
+          )}
+          {tab === "fisheries" && (
+            <Fisheries
+              snapshot={snapshot}
+              onExplore={() => exploreDomain("fisheries")}
+            />
+          )}
+          {tab === "biodiversity" && (
+            <Biodiversity
+              snapshot={snapshot}
+              onExplore={() => exploreDomain("biodiversity")}
+              onAsk={(text) => ask(text, {})}
+            />
+          )}
+          {tab === "admin" && <Administration />}
           {chatVisited && (
             <div
               hidden={tab !== "floatchat"}

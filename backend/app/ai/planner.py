@@ -38,6 +38,8 @@ def effective_question(request):
 
 
 def general_explanation(question):
+    if re.match(r'\s*(what (?:is|are)|define|explain the (?:term|concept))\b', question, re.I):
+        return not bool(re.search(r'\b(latest|today|latitude|longitude|forecast|predict)\b|\d', question, re.I))
     return bool(re.search(r'\b(how|why|explain|in general)\b', question, re.I)
                 and re.search(r'\b(fish|marine|ocean|temperature|temp|warming|heatwaves?)\b', question, re.I)
                 and not re.search(r'\b(show|measure|latest|today|latitude|longitude|compare|forecast|predict)\b|\d', question, re.I))
@@ -131,7 +133,7 @@ async def make_plan(request: ChatRequest) -> Plan:
         if re.search(r'\bfish\b', query, re.I) and re.search(r'\b(temperature|warming)\b', query, re.I):
             query = query[:850] + ' fish abundance distribution growth survival reproduction thermal tolerance'
         return Plan(domains=['research'], research_query=query[:1000],
-                    limitations=['General literature explanation; responses vary by species, life stage and local conditions.'])
+                    limitations=['Literature explanation based on the selected sources, not a new observation or computed regional analysis.'])
     fallback = rule_plan(request)
     if not provider.model_enabled():
         return finalize(fallback)
