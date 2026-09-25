@@ -8,11 +8,15 @@ import {
 export function ResearchLibrary({
   selected,
   onSelect,
+  expanded,
 }: {
   selected: string[];
   onSelect: (ids: string[]) => void;
+  expanded?: boolean;
 }) {
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState("");
@@ -23,7 +27,13 @@ export function ResearchLibrary({
     getDocuments(initial.signal)
       .then((data) => setDocuments(data.documents))
       .catch((error) => {
-        if (!initial.signal.aborted) setNotice(error.message);
+        if (!initial.signal.aborted) {
+          setNotice(error.message);
+          setLoadFailed(true);
+        }
+      })
+      .finally(() => {
+        if (!initial.signal.aborted) setLoading(false);
       });
     return () => {
       initial.abort();
@@ -57,9 +67,17 @@ export function ResearchLibrary({
     }
   }
   return (
-    <details className="border-b border-slate-200 bg-white px-4 md:px-8 py-3">
+    <details
+      open={expanded}
+      className="border-b border-slate-200 bg-white px-4 md:px-8 py-3"
+    >
       <summary className="cursor-pointer text-xs font-semibold text-[#001b3d]">
-        Scientific knowledge library · {documents.length} documents
+        Scientific knowledge library ·{" "}
+        {loading
+          ? "Loading papers..."
+          : loadFailed
+            ? "Unavailable"
+            : `${documents.length} documents`}
         {selected.length ? ` · ${selected.length} selected` : ""}
       </summary>
       <div className="max-h-[55vh] overflow-auto pt-3 space-y-3">
@@ -67,7 +85,7 @@ export function ResearchLibrary({
           Select documents to restrict retrieval. With none selected, FloatChat
           searches the shared curated library.
         </p>
-        {documents.length === 0 && (
+        {!loading && !loadFailed && documents.length === 0 && (
           <p className="text-xs text-slate-600">
             No documents indexed yet. A library administrator can import
             permitted scientific text below.

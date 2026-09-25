@@ -26,11 +26,35 @@ Marine source credentials and routing are documented in [SOURCES.md](SOURCES.md)
 Add these values to **backend/.env** (preserve existing database configuration):
 
 ```dotenv
-LLM_PROVIDER=gemini
-LLM_MODEL=gemini-2.5-flash
-GEMINI_API_KEY=your-private-key
+LLM_PROVIDER=openrouter
+LLM_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
+OPENROUTER_API_KEY=your-private-key
+LLM_TIMEOUT_SECONDS=90
+AI_TIMEOUT_SECONDS=200
+EMBEDDING_PROVIDER=auto
 EMBEDDING_MODEL=gemini-embedding-001
 ```
+
+The selected chat model uses OpenRouter's `/api/v1/chat/completions` endpoint.
+The free Nemotron endpoint does not enforce `response_format`; Atlas supplies
+the schema in its instruction and validates returned JSON with Pydantic. Invalid,
+truncated, refused or rate-limited responses fall back to rule planning and/or
+evidence-only answers. No automatic paid-model fallback or repeated retries are
+configured. Tool calls returned by the provider are not executed. A normal
+question can use two chat calls (planner and synthesis). No live model calls have
+been made without your key. The free provider logs usage; use permitted public
+data and research text rather than confidential documents.
+
+Chat and embeddings are independent. `EMBEDDING_PROVIDER=auto` follows Gemini or
+Ollama when used for chat, and disables embeddings for OpenRouter. Document import
+and lexical retrieval still work. For semantic retrieval with Nemotron chat, set
+`EMBEDDING_PROVIDER=gemini` plus `GEMINI_API_KEY` and a compatible embedding model,
+or `EMBEDDING_PROVIDER=ollama` plus an installed 768-dimensional embedding model.
+Existing vectors keep their provider/model identity; changing only the chat model
+does not require reindexing when the embedding provider/model remains the same.
+
+Gemini chat remains available with `LLM_PROVIDER=gemini`,
+`LLM_MODEL=gemini-2.5-flash` and `GEMINI_API_KEY`.
 
 Model names are configurable. Choose a model available to your account; provider
 availability and lifecycle can change. No key is required to use rule planning,
@@ -56,6 +80,25 @@ Restart the backend after changing configuration. The local launcher continues
 to use SQLite at `backend/atlas-local.db` and initializes the new research tables.
 
 ## Knowledge library / RAG
+
+### Local embeddings for supplied PDFs
+
+This workspace now uses `EMBEDDING_PROVIDER=local` and
+`EMBEDDING_MODEL=BAAI/bge-base-en-v1.5` (768 dimensions, CPU). Model weights are
+downloaded once to `backend/.embedding-cache`; paper text is embedded locally.
+No new API key is needed. Chat synthesis still sends selected passages to the
+configured chat provider when you ask a question.
+
+Import a folder of PDFs into the **local launcher database** with:
+
+```powershell
+.venv/Scripts/python scripts/index_papers.py "C:\path\to\papers"
+```
+
+The importer keeps original page numbers and DOI citations, splitting long papers
+into labelled parts. It writes `paper-index-report.json` with the imported IDs.
+Tables/figures are not interpreted visually; PDF text extraction has that limit.
+The shared library is readable by all users of this local application.
 
 Set `ADMIN_API_KEY` on the backend to permit document management. The FloatChat
 library panel accepts PDF/TXT/Markdown with a title, source URL and license.
@@ -169,10 +212,10 @@ Remove/expire historical graph data according to your deployment's retention pol
 - The rule planner recognizes a limited vocabulary, three coarse sea regions,
   selected Indian administrative regions, and explicit `latitude X, longitude Y`.
   The model improves language understanding but cannot invent coordinates.
-- Chat budget: four concurrent requests per process, 100-second total deadline,
+- Chat budget: four concurrent requests per process; the selected local configuration uses a 200-second total deadline,
   no recursive autonomous tool loops. Existing API rate limits still apply.
 - Provider schemas and pgvector query generation are tested offline; actual
-  Gemini/Ollama, PostgreSQL/pgvector and Neo4j services require configured credentials
+  OpenRouter/Gemini/Ollama, PostgreSQL/pgvector and Neo4j services require configured credentials
   and separate live validation. No paid model calls were made during development.
 
 ## Tests and reference contracts

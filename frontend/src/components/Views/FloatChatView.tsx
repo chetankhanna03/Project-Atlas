@@ -13,6 +13,8 @@ import { ResearchLibrary } from "./ResearchLibrary";
 interface Props {
   setActiveTab: (tab: ActiveTab) => void;
   initialQuery?: string;
+  initialScope?: Scope | null;
+  initialDocumentIds?: string[];
 }
 interface Message {
   id: string;
@@ -27,14 +29,23 @@ const suggestions = [
   "Find scientific literature about ocean warming and fisheries",
 ];
 
-export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
+export const FloatChatView: React.FC<Props> = ({
+  initialQuery,
+  initialScope,
+  initialDocumentIds,
+}) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState(initialQuery || "");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<AIStatus | null>(null);
   const [connectionError, setConnectionError] = useState("");
-  const [context, setContext] = useState<Scope | null>(null);
-  const [documents, setDocuments] = useState<string[]>([]);
+  const [context, setContext] = useState<Scope | null>(initialScope || null);
+  const [documents, setDocuments] = useState<string[]>(
+    initialDocumentIds || [],
+  );
+  useEffect(() => {
+    if (initialDocumentIds) setDocuments(initialDocumentIds);
+  }, [initialDocumentIds]);
   const [useLiterature, setUseLiterature] = useState(false);
   const pending = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
@@ -59,6 +70,9 @@ export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, busy]);
+  useEffect(() => {
+    if (initialScope) setContext(initialScope);
+  }, [initialScope]);
   async function send(value = input) {
     const question = value.trim();
     if (!question || pending.current || question.length > 2000) return;
@@ -80,7 +94,7 @@ export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
     setConnectionError("");
     const timeout = window.setTimeout(
       () => controller.abort("timeout"),
-      130000,
+      250000,
     );
     try {
       const result = await sendChat(
@@ -145,7 +159,7 @@ export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
             <span className="material-symbols-outlined text-[#008ebe]">
               forum
             </span>
-            <h1 className="font-bold text-lg text-[#001b3d]">FloatChat</h1>
+            <h1 className="font-bold text-lg text-[#001b3d]">Ask Atlas</h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
             Ocean questions. Retrieved evidence. Traceable answers.
@@ -183,6 +197,15 @@ export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
         </p>
       )}
       <ResearchLibrary selected={documents} onSelect={setDocuments} />
+      {context?.bbox && (
+        <div className="chat-area-context">
+          <span>Exploring your selected area</span>
+          <small>
+            {context.bbox.map((n) => n.toFixed(2)).join(" / ")} (W / S / E / N)
+          </small>
+          <button onClick={() => setContext(null)}>Clear area context</button>
+        </div>
+      )}
       <div
         className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar"
         role="log"
@@ -196,7 +219,7 @@ export const FloatChatView: React.FC<Props> = ({ initialQuery }) => {
                 ATLAS OCEAN INTELLIGENCE
               </span>
               <h2 className="text-2xl md:text-3xl font-semibold tracking-tight text-[#001b3d] mt-3">
-                Start with a question about the ocean.
+                A little curiosity. A deeper understanding.
               </h2>
               <p className="max-w-xl text-sm text-slate-600 mt-3 leading-relaxed">
                 Explore observations, biodiversity and scientific literature.

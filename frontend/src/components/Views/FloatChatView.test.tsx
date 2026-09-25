@@ -114,7 +114,7 @@ test("reset aborts a pending request and discards its late response", async () =
   resolve(answer);
   await waitFor(() => expect(screen.queryByText(answer.answer)).toBeNull());
   expect(
-    screen.getByText("Start with a question about the ocean."),
+    screen.getByText("A little curiosity. A deeper understanding."),
   ).toBeTruthy();
 });
 
@@ -135,4 +135,21 @@ test("displays backend errors without manufacturing an answer", async () => {
 test("blocks executable citation URLs", () => {
   expect(api.safeSourceUrl("javascript:alert(1)")).toBeUndefined();
   expect(api.safeSourceUrl("https://example.org")).toBe("https://example.org/");
+});
+
+test("carries selected map area and library papers into the request", async () => {
+  vi.mocked(api.sendChat).mockResolvedValue(answer);
+  const scope = { bbox: [50, 5, 78, 25] };
+  render(
+    <FloatChatView
+      setActiveTab={vi.fn()}
+      initialScope={scope}
+      initialDocumentIds={["paper-1"]}
+      initialQuery="Explain this area"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+  await waitFor(() => expect(api.sendChat).toHaveBeenCalled());
+  expect(vi.mocked(api.sendChat).mock.calls[0][2]).toEqual(scope);
+  expect(vi.mocked(api.sendChat).mock.calls[0][3]).toEqual(["paper-1"]);
 });

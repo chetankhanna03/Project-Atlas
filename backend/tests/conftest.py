@@ -30,6 +30,8 @@ def client(monkeypatch, tmp_path):
         monkeypatch.setattr(module, 'SessionLocal', sessions)
     from app.config import settings
     monkeypatch.setattr(settings, 'llm_provider', 'disabled')
+    monkeypatch.setattr(settings,'embedding_provider','auto')
+    monkeypatch.setattr(settings,'openrouter_api_key',None)
     for key in ('gfw_api_key','iucn_api_key','copernicusmarine_service_username','copernicusmarine_service_password','openalex_api_key'):
         monkeypatch.setattr(settings,key,None)
     monkeypatch.setattr(settings,'openalex_enabled',False)

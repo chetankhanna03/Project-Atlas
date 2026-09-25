@@ -7,3 +7,11 @@ __pycache__/
 !.env.example
 *.db
 *.sqlite3
+.embedding-cache/
+backend/paper-index-report.json
+frontend/dashboard-desktop.png
+frontend/dashboard-mobile.png
+frontend/area-mouse.png
+frontend/area-touch.png
+frontend/atlas-chat.png
+frontend/atlas-library.png

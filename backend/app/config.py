@@ -13,11 +13,13 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = Field(20, gt=0, le=60)
     cache_ttl_seconds: int = Field(300, ge=0)
     rate_limit_per_minute: int = Field(120, ge=1, le=10000)
-    llm_provider: Literal['gemini', 'ollama', 'disabled'] = 'gemini'
-    llm_model: str = 'gemini-2.5-flash'
+    llm_provider: Literal['openrouter', 'gemini', 'ollama', 'disabled'] = 'openrouter'
+    llm_model: str = 'nvidia/nemotron-3-ultra-550b-a55b:free'
+    openrouter_api_key: str | None = None
     gemini_api_key: str | None = None
     ollama_base_url: str = 'http://127.0.0.1:11434'
     embedding_model: str = 'gemini-embedding-001'
+    embedding_provider: Literal['auto', 'local', 'gemini', 'ollama', 'disabled'] = 'auto'
     llm_timeout_seconds: float = Field(35, ge=1, le=120)
     ai_timeout_seconds: float = Field(100, ge=1, le=240)
     ai_max_concurrent: int = Field(4, ge=1, le=16)

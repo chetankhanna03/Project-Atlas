@@ -25,11 +25,7 @@ export const TopNav: React.FC<TopNavProps> = ({
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
-  const notifications = [
-    { id: '1', title: 'Anomalous SST Spike (+1.4°C)', source: 'NOAA Reef Watch Sector 7', time: '12m ago', unread: true },
-    { id: '2', title: 'Argo Float #2904102 Transmitted', source: 'Bay of Bengal Deep Profile', time: '34m ago', unread: true },
-    { id: '3', title: 'Knowledge Graph Re-indexed', source: 'Copernicus / GFW Node', time: '2h ago', unread: false }
-  ];
+  const notifications: {id:string;title:string;source:string;time:string;unread:boolean}[] = [];
 
   // Landing view navbar
   if (activeTab === 'landing') {
@@ -74,7 +70,7 @@ export const TopNav: React.FC<TopNavProps> = ({
               disabled={isSyncing}
               aria-label="sync"
               className="p-2 text-[#44474e] hover:text-[#001b3d] hover:bg-[#eceef0] rounded-full transition-colors"
-              title="Sync Knowledge Graph"
+              title="Knowledge library status"
             >
               <span className={`material-symbols-outlined text-[20px] ${isSyncing ? 'animate-spin text-[#00BFFF]' : ''}`}>
                 sync
@@ -171,7 +167,7 @@ export const TopNav: React.FC<TopNavProps> = ({
           onClick={onSyncClick}
           disabled={isSyncing}
           className="text-[#44474e] hover:text-[#001b3d] p-2 rounded hover:bg-[#e0e3e5] transition-colors"
-          title="Synchronize Live Sensor Streams"
+          title="Knowledge library status"
         >
           <span className={`material-symbols-outlined text-[20px] ${isSyncing ? 'animate-spin text-[#00BFFF]' : ''}`}>
             sync
@@ -185,14 +181,14 @@ export const TopNav: React.FC<TopNavProps> = ({
             title="Notifications"
           >
             <span className="material-symbols-outlined text-[20px]">notifications</span>
-            <span className="absolute top-2 right-2 w-2 h-2 bg-[#ba1a1a] rounded-full" />
+            
           </button>
 
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 bg-white border border-[#c4c6cf] rounded shadow-lg p-3 z-50">
               <div className="flex justify-between items-center mb-2 pb-2 border-b border-[#e0e3e5]">
                 <span className="font-label-caps text-[11px] text-[#001b3d] uppercase tracking-wider">System Alerts</span>
-                <span className="font-data-mono text-[10px] text-[#00BFFF]">Real-Time</span>
+                <span className="font-data-mono text-[10px] text-[#00BFFF]">No alerts configured</span>
               </div>
               <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
                 {notifications.map(n => (

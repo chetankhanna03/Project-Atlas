@@ -14,11 +14,21 @@ class ModelUnavailable(Exception):
 
 
 def model_enabled():
-    return settings.llm_provider == 'ollama' or (settings.llm_provider == 'gemini' and bool(settings.gemini_api_key))
+    return settings.llm_provider == 'ollama' or (settings.llm_provider == 'gemini' and bool(settings.gemini_api_key)) or (settings.llm_provider == 'openrouter' and bool(settings.openrouter_api_key))
+
+
+def embedding_provider():
+    if settings.embedding_provider != 'auto':
+        return settings.embedding_provider
+    return settings.llm_provider if settings.llm_provider in ('gemini','ollama') else 'disabled'
+
+
+def embeddings_enabled():
+    return embedding_provider() in ('local','ollama') or (embedding_provider() == 'gemini' and bool(settings.gemini_api_key))
 
 
 def embedding_key():
-    return f'{settings.llm_provider}:{settings.embedding_model}:{DIMENSIONS}'
+    return f'{embedding_provider()}:{settings.embedding_model}:{DIMENSIONS}'
 
 
 async def post_json(url, payload, headers=None):
@@ -44,7 +54,23 @@ async def generate(system: str, payload: dict, schema: type[BaseModel]):
     if not model_enabled():
         raise ModelUnavailable('No model configured; returning evidence-only results.')
     prompt = json.dumps(payload, ensure_ascii=False)
-    if settings.llm_provider == 'gemini':
+    if settings.llm_provider == 'openrouter':
+        # This free endpoint does not enforce response_format. Validate locally.
+        instruction = system + '\nReturn exactly one JSON object matching this schema, without markdown or commentary:\n' + json.dumps(schema.model_json_schema())
+        body = {'model': settings.llm_model, 'stream': False, 'temperature': 0, 'max_tokens': 4096,
+                'messages': [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': prompt}]}
+        data = await post_json('https://openrouter.ai/api/v1/chat/completions', body,
+                              {'Authorization': 'Bearer ' + settings.openrouter_api_key})
+        try:
+            choice = data['choices'][0]
+            if choice.get('finish_reason') != 'stop' or choice['message'].get('tool_calls') or choice['message'].get('refusal'):
+                raise ValueError()
+            raw = choice['message']['content']
+            if not isinstance(raw, str):
+                raise ValueError()
+        except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+            raise ModelUnavailable('OpenRouter did not return a complete JSON answer.') from None
+    elif settings.llm_provider == 'gemini':
         url = 'https://generativelanguage.googleapis.com/v1beta/models/' + quote(settings.llm_model, safe='') + ':generateContent'
         body = {'systemInstruction': {'parts': [{'text': system}]},
                 'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
@@ -76,11 +102,18 @@ async def generate(system: str, payload: dict, schema: type[BaseModel]):
 
 
 async def embed(texts: list[str], *, query=False) -> list[list[float]]:
-    if not model_enabled():
+    if not embeddings_enabled():
         raise ModelUnavailable('Embeddings unavailable; lexical retrieval is enabled.')
     if not texts or len(texts) > 64:
         raise ValueError('Embedding batches must contain 1–64 chunks.')
-    if settings.llm_provider == 'gemini':
+    if embedding_provider() == 'local':
+        from starlette.concurrency import run_in_threadpool
+        from app.ai.local_embeddings import embed_local
+        try:
+            vectors = await run_in_threadpool(embed_local, texts, query)
+        except Exception:
+            raise ModelUnavailable('Local embedding model unavailable; run the paper indexing setup.') from None
+    elif embedding_provider() == 'gemini':
         model = 'models/' + settings.embedding_model
         requests = [{'model': model, 'content': {'parts': [{'text': text}]},
                      'taskType': 'RETRIEVAL_QUERY' if query else 'RETRIEVAL_DOCUMENT',

@@ -21,6 +21,7 @@ _active = 0
 def ai_status():
     return {'provider': settings.llm_provider, 'model': settings.llm_model,
             'model_configured': provider.model_enabled(), 'embedding_model': settings.embedding_model,
+            'embedding_provider': provider.embedding_provider(), 'embeddings_configured': provider.embeddings_enabled(),
             'embedding_dimensions': provider.DIMENSIONS, 'orchestrator': 'langgraph',
             'knowledge_graph_configured': knowledge.configured(),
             'agents': ['ocean', 'fisheries', 'biodiversity', 'research'],

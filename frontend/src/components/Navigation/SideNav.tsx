@@ -25,7 +25,6 @@ export const SideNav: React.FC<SideNavProps> = ({
   const navItems: Array<{ id: ActiveTab; label: string; icon: string }> = [
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
     { id: 'floatchat', label: 'FloatChat', icon: 'forum' },
-    { id: 'explore', label: 'Explore Data', icon: 'database' },
     { id: 'analytics', label: 'Analytics', icon: 'insights' },
     { id: 'map', label: 'Map', icon: 'map' },
     { id: 'sources', label: 'Sources', icon: 'source' },
@@ -45,7 +44,8 @@ export const SideNav: React.FC<SideNavProps> = ({
       <nav
         className={`
           fixed md:static inset-y-0 left-0 z-50 w-64 bg-[#f2f4f6] border-r border-[#c4c6cf] 
-          flex flex-col py-6 px-4 shrink-0 transition-transform duration-200 ease-in-out
+          flex-col py-6 px-4 shrink-0 transition-transform duration-200 ease-in-out
+          ${isOpenMobile ? 'flex' : 'hidden md:flex'}
           ${isOpenMobile ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
       >
@@ -71,6 +71,8 @@ export const SideNav: React.FC<SideNavProps> = ({
             return (
               <button
                 key={item.id}
+                aria-label={item.label}
+                aria-current={isActive ? 'page' : undefined}
                 onClick={() => {
                   setActiveTab(item.id);
                   onCloseMobile?.();
@@ -113,7 +115,7 @@ export const SideNav: React.FC<SideNavProps> = ({
             <span className={`material-symbols-outlined text-[16px] text-[#00BFFF] ${isSyncing ? 'animate-spin' : ''}`}>
               sync
             </span>
-            <span>{isSyncing ? 'Syncing Graph...' : 'Sync Knowledge Graph'}</span>
+            <span>{isSyncing ? 'Loading...' : 'Knowledge library'}</span>
           </button>
 
           <div className="flex flex-col gap-0.5">
@@ -144,7 +146,7 @@ export const SideNav: React.FC<SideNavProps> = ({
             </div>
             <div className="flex flex-col min-w-0">
               <span className="font-label-caps text-[11px] text-[#001b3d] truncate">Atlas Intelligence</span>
-              <span className="font-data-mono text-[10px] text-[#44474e]">ID: 884-2A (Online)</span>
+              <span className="font-data-mono text-[10px] text-[#44474e]">Local workspace</span>
             </div>
           </div>
         </div>

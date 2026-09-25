@@ -127,6 +127,7 @@ def test_invalid_model_synthesis_falls_back(client, monkeypatch):
 
 
 def test_embeddings_normalized_and_dimensions_checked(monkeypatch):
+    monkeypatch.setattr(settings, 'embedding_provider', 'gemini')
     monkeypatch.setattr(settings, 'llm_provider', 'gemini')
     monkeypatch.setattr(settings, 'gemini_api_key', 'fake-test-key')
     async def post(*args, **kwargs):
@@ -144,6 +145,7 @@ def test_semantic_retrieval_and_reindex(client, monkeypatch):
     response = client.post('/api/research/documents', json=DOCUMENT, headers=AUTH)
     doc_id = response.json()['id']
     monkeypatch.setattr(provider, 'model_enabled', lambda: True)
+    monkeypatch.setattr(provider, 'embeddings_enabled', lambda: True)
     async def embed(texts, **kwargs):
         return [[1.0] + [0.0]*767 for _ in texts]
     monkeypatch.setattr(provider, 'embed', embed)

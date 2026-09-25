@@ -12,3 +12,4 @@ pypdf>=6,<7
 neo4j>=5.28,<7
 netCDF4>=1.7,<2
 copernicusmarine>=2.4,<3
+fastembed>=0.7,<1

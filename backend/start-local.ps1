@@ -1,4 +1,31 @@
 $ErrorActionPreference = 'Stop'
+# Reuse a healthy Atlas server instead of starting a second process on its port.
+$atlasPortBusy = $false
+$atlasProbe = New-Object System.Net.Sockets.TcpClient
+try {
+    $atlasProbe.Connect('127.0.0.1', 8000)
+    $atlasPortBusy = $true
+} catch [System.Net.Sockets.SocketException] {
+    # No listener: proceed with normal startup.
+} finally {
+    $atlasProbe.Dispose()
+}
+if ($atlasPortBusy) {
+    $atlasAlreadyRunning = $false
+    try {
+        $atlasHealth = Invoke-RestMethod 'http://127.0.0.1:8000/health' -TimeoutSec 5
+        $atlasSchema = Invoke-RestMethod 'http://127.0.0.1:8000/openapi.json' -TimeoutSec 5
+        $atlasAlreadyRunning = $atlasHealth.status -eq 'healthy' -and $atlasSchema.info.title -eq 'Project Atlas API'
+    } catch {
+        # An occupied port alone does not identify a healthy Atlas server.
+    }
+    if ($atlasAlreadyRunning) {
+        Write-Host 'Project Atlas backend is already running at http://127.0.0.1:8000'
+        Write-Host 'API docs: http://127.0.0.1:8000/docs'
+        return
+    }
+    throw 'Port 8000 is occupied by another service or an unhealthy backend. Close that process, then rerun this launcher. Use netstat -ano | findstr :8000 to identify its PID.'
+}
 $atlasPreviousDatabaseUrl = $env:DATABASE_URL
 Push-Location $PSScriptRoot
 try {

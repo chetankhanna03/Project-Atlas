@@ -20,6 +20,22 @@ def tokens(text):
     return [token for token in re.findall(r'[a-z]{3,}', text.lower()) if token not in STOP]
 
 
+def substantive_passage(text):
+    # Reference lists contain topic words but are not findings from the citing paper.
+    compact = re.sub(r'\s+', '', text.lower())
+    return not (compact.count('doi.org/') >= 2 or
+                len(re.findall(r'\(\s*(?:19|20)\d{2}[a-z]?\s*\)\.', text)) >= 3 or
+                len(tokens(text)) < 12)
+
+
+def clean_passage(text):
+    abstract = re.search(r'\bAbstract\b', text)
+    if abstract and re.search(r'\b(Received|Correspondence|Email|DOI)\b', text[:abstract.start()]):
+        text = text[abstract.end():].strip()
+    text = re.split(r'\bDownloaded from\b', text)[0]
+    return re.sub(r'(?<=[a-z])\s*-\s+(?=[a-z])', '', text).strip()
+
+
 def chunk_pages(pages):
     result = []
     for page, text in pages:
@@ -82,7 +98,7 @@ async def ingest(metadata: DocumentInput, pages=None):
     if existing:
         return {**existing, 'limitations': ['Existing document preserved. Use reindex to rebuild its embeddings.']}
     vectors, warnings = [], []
-    if metadata.use_embeddings and provider.model_enabled():
+    if metadata.use_embeddings and provider.embeddings_enabled():
         try:
             for start in range(0, len(chunks), 32):
                 vectors.extend(await provider.embed([text for _, text in chunks[start:start+32]]))
@@ -107,10 +123,12 @@ def retrieve(query, document_ids, vector, limit=6):
         chunks = db.scalars(statement.order_by(ResearchChunk.id).limit(settings.rag_max_chunks)).all()
         if not chunks:
             return [], 'empty'
-        frequency = Counter(term for chunk in chunks for term in set(tokens(chunk.text)))
+        texts = {chunk.id: clean_passage(chunk.text) for chunk in chunks}
+        chunks = [chunk for chunk in chunks if substantive_passage(texts[chunk.id])]
+        frequency = Counter(term for chunk in chunks for term in set(tokens(texts[chunk.id])))
         lexical = []
         for chunk in chunks:
-            terms = Counter(tokens(chunk.text))
+            terms = Counter(tokens(texts[chunk.id]))
             score = sum(math.log(1 + len(chunks)/(1+frequency[t])) * min(terms[t], 3) for t in query_terms if terms[t])
             if score:
                 lexical.append((score, chunk))
@@ -121,7 +139,7 @@ def retrieve(query, document_ids, vector, limit=6):
                 distance = ResearchChunk.embedding.cosine_distance(vector)
                 ranked = statement.where(ResearchChunk.embedding_model == provider.embedding_key(),
                                          ResearchChunk.embedding.is_not(None), distance < 0.65).order_by(distance).limit(20)
-                semantic = [(1, chunk) for chunk in db.scalars(ranked).all()]
+                semantic = [(1, chunk) for chunk in db.scalars(ranked).all() if substantive_passage(chunk.text)]
             else:
                 for chunk in chunks:
                     if chunk.embedding_model == provider.embedding_key() and chunk.embedding is not None:
@@ -138,11 +156,12 @@ def retrieve(query, document_ids, vector, limit=6):
         per_document = Counter()
         for chunk_id in sorted(scores, key=lambda key: (-scores[key], key)):
             chunk = candidates[chunk_id]
-            if per_document[chunk.document_id] >= 2:
+            document_key = chunk.document.doi or chunk.document_id
+            if per_document[document_key] >= 2:
                 continue
-            per_document[chunk.document_id] += 1
+            per_document[document_key] += 1
             doc = chunk.document
-            evidence.append(Evidence(id='R-' + chunk_id, domain='research', title=doc.title, text=chunk.text,
+            evidence.append(Evidence(id='R-' + chunk_id, domain='research', title=doc.title, text=clean_passage(chunk.text),
                                       source='Curated knowledge library', url=doc.source_url, kind='literature',
                                       document_id=doc.id, page=chunk.page, authors=doc.authors, year=doc.year, doi=doc.doi,
                                       retrieved_at=doc.created_at.replace(tzinfo=timezone.utc).isoformat(),
@@ -162,7 +181,7 @@ async def search(query, document_ids=None, limit=6):
             return db.scalar(statement.limit(1)) is not None
     if not await run_in_threadpool(has_chunks):
         return [], 'empty', []
-    if provider.model_enabled():
+    if provider.embeddings_enabled():
         try:
             vector = (await provider.embed([query], query=True))[0]
         except provider.ModelUnavailable:

@@ -5,7 +5,7 @@ import uuid
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from app.ai.schemas import ChatRequest, ChatResponse, Plan, AgentResult, Claim, GeneratedAnswer
-from app.ai.planner import make_plan
+from app.ai.planner import make_plan, effective_question
 from app.ai.agents import run_agent
 from app.ai import provider, knowledge
 
@@ -22,7 +22,14 @@ Catalog metadata describes available datasets, not measured observations.
 Copernicus model output is not an in-situ observation. GFW effort is not catch.
 Do not claim correlation without a computed analysis; do not infer causation.
 If evidence is insufficient for an aspect, do not make a claim about it. Give a
-few concise claims, not an unsupported general introduction. Respond using schema.'''
+useful explanation with 4-6 connected paragraphs when evidence permits: answer
+directly first, then explain supported mechanisms, variation and limits. Distinguish
+population abundance from geographic distribution; range shifts alone do not measure
+total population change. Synthesize findings rather than listing quotations or
+bibliography entries. Never treat a paper's reference list as its own findings.
+Put citations ONLY in evidence_ids (e.g. ["E1"]), never inside claim.text.
+Do not number paragraphs or add unsupported quantities. Use cautious language for
+associations; do not present universal causal claims. Respond using schema.'''
 
 
 class State(TypedDict, total=False):
@@ -59,6 +66,10 @@ def extractive_claims(evidence, question):
             continue
         if item.kind == 'literature':
             sentences = re.split(r'(?<=[.!?])\s+', item.text)
+            sentences = [s for s in sentences if len(s.split()) >= 8 and re.search(r'[.!?]$', s.strip())
+                         and not re.search(r'\b(Received:|Revised:|Accepted:|DOI:|Correspondence|Copyright|creativecommons|Email:)\b', s, re.I)]
+            if not sentences:
+                continue
             sentence = max(sentences, key=lambda s: len(terms & set(re.findall(r'\w{4,}', s.lower()))))
             text = f'Passage from “{item.title}”: “{sentence[:650]}”'
         elif item.kind == 'local_unverified':
@@ -95,13 +106,18 @@ async def synthesize(request, plan, results):
             answer = 'I need a more specific query before retrieving observations. ' + ' '.join(limitations[:2])
     else:
         status = 'partial' if any(result.status != 'ok' for result in results) or any('No predictive' in note for note in limitations) else 'ok'
-        claims = extractive_claims(evidence, request.message)
+        question = effective_question(request)
+        claims = extractive_claims(evidence, plan.research_query or question)
         if provider.model_enabled():
             try:
-                generated = await provider.generate(SYNTHESIS,
-                    {'question': request.message, 'scope': plan.scope.model_dump(mode='json'),
+                payload = {'question': question, 'research_question': plan.research_query, 'scope': plan.scope.model_dump(mode='json'),
                      'evidence': [{'id': item.id, 'text': item.text[:2000], 'title': item.title, 'kind': item.kind,
-                                   'source': item.source} for item in evidence[:16]], 'limitations': limitations}, GeneratedAnswer)
+                                   'source': item.source} for item in evidence[:16]], 'limitations': limitations}
+                generated = await provider.generate(SYNTHESIS, payload, GeneratedAnswer)
+                if not grounded(generated.claims, evidence[:16]):
+                    generated = await provider.generate(SYNTHESIS, {**payload,
+                        'revision_request': 'Rewrite using only supported statements. Citation IDs belong only in evidence_ids. No bracket citations, paragraph numbering, unsupported numbers, causal assertions or forecasts.',
+                        'draft': generated.model_dump()}, GeneratedAnswer)
                 if grounded(generated.claims, evidence[:16]):
                     claims, mode = generated.claims, 'model'
                 else:
@@ -111,6 +127,9 @@ async def synthesize(request, plan, results):
         else:
             limitations.append('No model configured: this is an evidence-only response, not LLM synthesis.')
         answer = '\n\n'.join(claim.text + ' ' + ' '.join(f'[{key}]' for key in claim.evidence_ids) for claim in claims)
+        if not claims:
+            status = 'no_data'
+            answer = 'The retrieved passages do not contain enough complete, supported information to answer this question. Try a more specific research question.'
         if len(plan.domains) > 1:
             limitations.append('Independent sources have not been spatially/temporally joined. No cross-domain correlation or causal relationship has been established.')
         if mode == 'model':
