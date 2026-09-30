@@ -10,7 +10,9 @@ DIMENSIONS = 768
 
 
 class ModelUnavailable(Exception):
-    pass
+    def __init__(self, message='Model unavailable', code='unavailable'):
+        super().__init__(message)
+        self.code = code
 
 
 def model_enabled():
@@ -45,9 +47,49 @@ async def post_json(url, payload, headers=None):
                 if not isinstance(data, dict):
                     raise ValueError()
                 return data
+    except httpx.HTTPStatusError as exc:
+        code = 'rate_limit' if exc.response.status_code == 429 else 'authentication' if exc.response.status_code in (401,403) else 'unavailable'
+        raise ModelUnavailable('Model provider request failed.', code) from None
+    except httpx.TimeoutException:
+        raise ModelUnavailable('Model provider timed out.', 'timeout') from None
     except (httpx.HTTPError, ValueError):
         # Provider responses and credential-bearing URLs must not reach client errors.
         raise ModelUnavailable('Model provider is unavailable or returned an invalid response.') from None
+
+
+async def chat_text(system: str, payload: dict):
+    """Ordinary conversation does not depend on scientific-claim JSON formatting."""
+    if settings.llm_provider != 'openrouter':
+        from pydantic import Field
+        class Reply(BaseModel):
+            answer: str = Field(min_length=1, max_length=12000)
+        return (await generate(system, payload, Reply)).answer
+    if not model_enabled():
+        raise ModelUnavailable('No conversation model configured.', 'configuration')
+    messages = [{'role':'system','content':system}]
+    messages.extend(payload.get('history', []))
+    # Scope is context only, never a claimed observation.
+    if payload.get('selected_scope'):
+        messages.append({'role':'user','content':'Selected query scope (not observed data): ' + json.dumps(payload['selected_scope'])})
+    messages.append({'role':'user','content':payload['question']})
+    data = await post_json('https://openrouter.ai/api/v1/chat/completions',
+        {'model':settings.llm_model,'stream':False,'temperature':0.3,'max_tokens':1800,
+         'reasoning':{'enabled':False},'messages':messages},
+        {'Authorization':'Bearer ' + settings.openrouter_api_key})
+    try:
+        choice = data['choices'][0]
+        message = choice['message']
+        text = message.get('content')
+        if message.get('tool_calls') or message.get('refusal') or not isinstance(text,str) or not text.strip():
+            raise ValueError()
+        if choice.get('finish_reason') not in ('stop','length'):
+            raise ValueError()
+        text = text.strip()
+        if choice.get('finish_reason') == 'length':
+            text += '\n\n[Response reached its length limit. Ask me to continue.]'
+        return text
+    except (KeyError,IndexError,TypeError,ValueError,AttributeError):
+        raise ModelUnavailable('Provider returned no usable answer.', 'empty_response') from None
 
 
 async def generate(system: str, payload: dict, schema: type[BaseModel]):

@@ -70,6 +70,7 @@ test("uses the backend, renders citations and passes follow-up context", async (
   );
   await user.click(screen.getByRole("button", { name: "Ask" }));
   await screen.findByText(answer.answer);
+  await user.click(screen.getByText(/Sources and answer details/));
   expect(
     screen.getByRole("link", { name: "Test document" }).getAttribute("href"),
   ).toBe("https://example.org/test");
@@ -162,7 +163,7 @@ test("conversation mode sends history-compatible requests and labels unsourced r
   render(<FloatChatView setActiveTab={vi.fn()} />);
   await user.selectOptions(screen.getByRole('combobox', {name: 'Answer mode'}), 'conversation');
   await user.type(screen.getByRole('textbox', {name: 'Ask Atlas'}), 'Why is the ocean salty?');
-  await user.click(screen.getByRole('button', {name: 'Ask', exact: true}));
+  await user.click(screen.getByRole('button', {name: 'Ask'}));
   await screen.findByText('A general explanation.');
   expect(vi.mocked(api.sendChat).mock.calls[0][6]).toBe('conversation');
   expect(screen.getByText(/Conversation.*not source-verified/)).toBeTruthy();

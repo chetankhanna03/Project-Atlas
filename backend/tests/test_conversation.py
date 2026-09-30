@@ -6,7 +6,7 @@ from app.ai import provider
 
 
 @pytest.mark.parametrize('message,expected', [
-    ('Hi', True), ('Are they dying?', True), ('What is a marine heatwave?', True),
+    ('Hi', True), ('Tell me about oceans', True), ('Explain biodiversity', True), ('How do fisheries work?', True), ('Are they dying?', True), ('What is a marine heatwave?', True),
     ('Find papers about marine heatwaves', False), ('Show SST at latitude 15 longitude 65', False),
     ('Give sources for that', False),
 ])
@@ -21,12 +21,12 @@ def test_research_selection_wins():
 
 
 def test_history_scope_and_no_false_citations(monkeypatch):
-    async def generate(system, payload, schema):
+    async def generate(system, payload):
         assert payload['history'][0]['content'] == 'Tell me about fish sightings'
         assert payload['selected_scope']['region'] == 'Arabian Sea'
         assert 'mortality' in system
-        return Reply(answer='Sightings alone cannot establish mortality. [E1]')
-    monkeypatch.setattr(provider, 'generate', generate)
+        return 'Sightings alone cannot establish mortality. [E1]'
+    monkeypatch.setattr(provider, 'chat_text', generate)
     request = ChatRequest(message='Are they dying?', context=Scope(region='Arabian Sea'),
                           history=[Turn(role='user',content='Tell me about fish sightings')])
     response = asyncio.run(converse(request))
@@ -38,7 +38,7 @@ def test_history_scope_and_no_false_citations(monkeypatch):
 def test_outage_and_greeting(monkeypatch):
     async def unavailable(*args):
         raise provider.ModelUnavailable()
-    monkeypatch.setattr(provider, 'generate', unavailable)
+    monkeypatch.setattr(provider, 'chat_text', unavailable)
     assert asyncio.run(converse(ChatRequest(message='Hello'))).status == 'ok'
     response = asyncio.run(converse(ChatRequest(message='Are they dying?')))
     assert response.status == 'unavailable'

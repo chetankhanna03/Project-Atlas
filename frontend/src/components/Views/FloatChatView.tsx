@@ -9,6 +9,7 @@ import {
 } from "../../services/atlas";
 import { ChatEvidence } from "./ChatEvidence";
 import { ResearchLibrary } from "./ResearchLibrary";
+import { MessageCircle, ArrowUp, RotateCcw, LoaderCircle, BookOpen, Waves } from 'lucide-react';
 
 interface Props {
   onResponse?: (result: ChatResponse) => void;
@@ -23,6 +24,20 @@ interface Message {
   content: string;
   result?: ChatResponse;
   error?: boolean;
+  retryQuestion?: string;
+}
+
+function AnswerText({text}: {text:string}) {
+  const inline = (line:string) => line.split(/(\*\*[^*]+\*\*)/g).map((part,i) => part.startsWith('**') ? <strong key={i}>{part.slice(2,-2)}</strong> : part);
+  return <div className="atlas-answer-text">{text.split(/\n\s*\n/).map((block,i) => {
+    const lines=block.split('\n');
+    if(lines.length>2 && /^\s*\|/.test(lines[0]) && /^\s*\|?\s*:?-{3,}/.test(lines[1])) {
+      const cells=(line:string)=>line.trim().replace(/^\||\|$/g,'').split('|').map(cell=>cell.trim());
+      return <div key={i} className="overflow-x-auto"><table><thead><tr>{cells(lines[0]).map((cell,j)=><th key={j}>{inline(cell)}</th>)}</tr></thead><tbody>{lines.slice(2).map((line,j)=><tr key={j}>{cells(line).map((cell,k)=><td key={k}>{inline(cell)}</td>)}</tr>)}</tbody></table></div>;
+    }
+    if(lines.every(line=>/^\s*(?:[-*]|\d+[.)])\s/.test(line))) return <ul key={i}>{lines.map((line,j)=><li key={j}>{inline(line.replace(/^\s*(?:[-*]|\d+[.)])\s/,''))}</li>)}</ul>;
+    return <p key={i}>{inline(block.replace(/^#{1,6}\s/gm,''))}</p>;
+  })}</div>;
 }
 const suggestions = [
   "How does warmer water affect fish?",
@@ -51,6 +66,15 @@ export const FloatChatView: React.FC<Props> = ({
   }, [initialDocumentIds]);
   const [useLiterature, setUseLiterature] = useState(false);
   const [answerMode, setAnswerMode] = useState<'auto' | 'conversation' | 'research'>('auto');
+  const [elapsed, setElapsed] = useState(0);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!busy) return;
+    setElapsed(0);
+    const timer=window.setInterval(()=>setElapsed(s=>s+1),1000);
+    return ()=>window.clearInterval(timer);
+  },[busy]);
   const pending = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -72,25 +96,27 @@ export const FloatChatView: React.FC<Props> = ({
     if (initialQuery) setInput(initialQuery);
   }, [initialQuery]);
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const log=logRef.current;
+    if(log) log.scrollTop=log.scrollHeight;
   }, [messages, busy]);
   useEffect(() => {
     if (initialScope) setContext(initialScope);
   }, [initialScope]);
-  async function send(value = input) {
+  async function send(value = input, retryId?: string) {
     const question = value.trim();
     if (!question || pending.current || question.length > 2000) return;
     const controller = new AbortController();
     pending.current = controller;
-    const history = messages
+    const conversation = retryId && messages.at(-1)?.id === retryId ? messages.slice(0,-2) : messages;
+    const history = conversation
       .filter((message) => !message.error)
       .slice(-8)
       .map((message) => ({
         role: message.role,
         content: message.content.slice(0, 6000),
       }));
-    setMessages((previous) => [
-      ...previous,
+    setMessages([
+      ...conversation,
       { id: crypto.randomUUID(), role: "user", content: question },
     ]);
     setInput("");
@@ -111,8 +137,10 @@ export const FloatChatView: React.FC<Props> = ({
         answerMode,
       );
       if (!controller.signal.aborted) {
-        onResponse?.(result);
-        setContext(result.plan.scope);
+        if(result.status !== 'unavailable') {
+          onResponse?.(result);
+          setContext(result.plan.scope);
+        }
         setMessages((previous) => [
           ...previous,
           {
@@ -120,6 +148,8 @@ export const FloatChatView: React.FC<Props> = ({
             role: "assistant",
             content: result.answer,
             result,
+            error: result.status === 'unavailable',
+            retryQuestion: result.status === 'unavailable' ? question : undefined,
           },
         ]);
       }
@@ -135,7 +165,7 @@ export const FloatChatView: React.FC<Props> = ({
             : "Could not retrieve an answer.";
         setMessages((previous) => [
           ...previous,
-          { id: crypto.randomUUID(), role: "assistant", content, error: true },
+          { id: crypto.randomUUID(), role: "assistant", content, error: true, retryQuestion: question },
         ]);
       }
     } finally {
@@ -156,15 +186,15 @@ export const FloatChatView: React.FC<Props> = ({
     setMessages([]);
     setContext(null);
     setInput("");
+    setDocuments([]);
+    setUseLiterature(false);
   }
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f7f9fb]">
+    <div className="atlas-chat flex-1 flex flex-col h-full overflow-hidden bg-[#f7f9fb]">
       <header className="shrink-0 border-b border-slate-200 bg-white px-4 md:px-8 py-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-[#008ebe]">
-              forum
-            </span>
+            <MessageCircle size={24} className="text-[#27655b]" />
             <h1 className="font-bold text-lg text-[#001b3d]">Ask Atlas</h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
@@ -213,6 +243,7 @@ export const FloatChatView: React.FC<Props> = ({
         </div>
       )}
       <div
+        ref={logRef}
         className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar"
         role="log"
         aria-label="FloatChat conversation"
@@ -220,7 +251,8 @@ export const FloatChatView: React.FC<Props> = ({
       >
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.length === 0 && (
-            <div className="py-8 md:py-14">
+            <div className="atlas-chat-welcome py-8 md:py-14">
+              <div className="atlas-chat-emblem"><Waves size={32}/></div>
               <span className="font-label-caps text-[#008ebe]">
                 ATLAS OCEAN INTELLIGENCE
               </span>
@@ -228,11 +260,10 @@ export const FloatChatView: React.FC<Props> = ({
                 A little curiosity. A deeper understanding.
               </h2>
               <p className="max-w-xl text-sm text-slate-600 mt-3 leading-relaxed">
-                Explore observations, biodiversity and scientific literature.
-                Atlas selects the relevant agents and shows what each source can
-                support.
+                Start with a simple question. Follow your curiosity, explore a place,
+                or ask for an explanation backed by research.
               </p>
-              <div className="grid md:grid-cols-3 gap-3 mt-7">
+              <div className="atlas-chat-suggestions grid md:grid-cols-2 gap-3 mt-7">
                 {suggestions.map((query) => (
                   <button
                     key={query}
@@ -271,12 +302,9 @@ export const FloatChatView: React.FC<Props> = ({
                     ? ` | ${message.result.mode === "conversation" ? "Conversation · not source-verified" : message.result.mode === "model" ? "Cited synthesis" : "Retrieved evidence"} | ${message.result.status.replaceAll("_", " ")}`
                     : ""}
                 </div>
-                <p
-                  className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${message.error ? "text-red-800" : ""}`}
-                >
-                  {message.content}
-                </p>
-                {message.result && message.result.mode !== 'conversation' && <ChatEvidence result={message.result} />}
+                <div className={message.error ? 'text-red-800' : ''}><AnswerText text={message.content}/></div>
+                {message.retryQuestion && message.id === messages.at(-1)?.id && <button className="atlas-chat-retry" disabled={busy} onClick={()=>send(message.retryQuestion,message.id)}><RotateCcw size={14}/> Retry question</button>}
+                {message.result && message.result.mode !== 'conversation' && <details className="atlas-chat-evidence"><summary><BookOpen size={15}/> Sources and answer details ({message.result.citations.length})</summary><ChatEvidence result={message.result} /></details>}
               </div>
             </article>
           ))}
@@ -285,10 +313,8 @@ export const FloatChatView: React.FC<Props> = ({
               className="flex items-center gap-3 text-sm text-slate-600"
               role="status"
             >
-              <span className="material-symbols-outlined animate-spin text-[#008ebe]">
-                progress_activity
-              </span>
-              Atlas is working on your answer...
+              <LoaderCircle size={18} className="animate-spin"/>
+              <span>{elapsed >= 20 ? 'Still waiting for the model or sources… You can cancel.' : 'Atlas is working on your answer…'} <small>{elapsed}s</small></span>
               <button onClick={cancel} className="ml-auto text-xs underline">
                 Cancel
               </button>
@@ -305,19 +331,20 @@ export const FloatChatView: React.FC<Props> = ({
             send();
           }}
         >
-          <label className="block text-xs text-slate-600 mb-3">
+          <label className="atlas-chat-mode block text-xs text-slate-600 mb-3">
             Answer mode{' '}
             <select aria-label="Answer mode" value={answerMode} disabled={busy} onChange={e=>setAnswerMode(e.target.value as typeof answerMode)} className="border rounded-lg p-2 bg-white">
               <option value="auto">Auto — conversation, data or literature</option>
               <option value="conversation">Conversation — general explanations</option>
               <option value="research">Research — retrieved sources and citations</option>
             </select>
-            <span className="block mt-1">{answerMode === 'conversation' ? 'General knowledge, not source-verified. Selected papers and data tools are not queried in this mode.' : 'Auto uses conversation for simple questions. Ask for sources or choose Research for evidence from the library.'}</span>
+            <span className="block mt-1">{answerMode === 'conversation' ? 'General answers · no source retrieval' : answerMode === 'research' ? 'Retrieved evidence with source citations' : 'Simple questions answered directly · ask for sources to use research'}</span>
           </label>
           <div className="flex items-end gap-3">
             <label className="flex-1">
               <span className="sr-only">Ask Atlas</span>
               <textarea
+                ref={inputRef}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 rows={2}
@@ -325,7 +352,7 @@ export const FloatChatView: React.FC<Props> = ({
                 placeholder="Ask a question, follow up, or ask for sources..."
                 className="w-full resize-none rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm focus:outline-none focus:border-[#008ebe]"
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                     event.preventDefault();
                     send();
                   }
@@ -337,9 +364,10 @@ export const FloatChatView: React.FC<Props> = ({
               disabled={busy || !input.trim()}
               className="mb-1 bg-[#001b3d] text-white rounded-lg px-5 py-3 text-sm disabled:opacity-40"
             >
-              Ask
+              <ArrowUp size={19} aria-hidden="true"/> <span>Ask</span>
             </button>
           </div>
+          <details className="atlas-chat-options"><summary>Research options {documents.length > 0 ? `· ${documents.length} selected papers` : ''}</summary>
           <div className="flex flex-wrap items-center justify-between gap-2 mt-2 text-[11px] text-slate-500">
             <label className="flex items-center gap-2">
               <input
@@ -358,7 +386,8 @@ export const FloatChatView: React.FC<Props> = ({
               | {input.length}/2000
             </span>
           </div>
-          {context && (
+          </details>
+          {context && (context.region || context.bbox || context.latitude != null) && (
             <p className="text-[11px] text-slate-500 mt-1">
               Follow-up context:{" "}
               {context.region ||

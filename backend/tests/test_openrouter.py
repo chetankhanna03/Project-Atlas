@@ -52,6 +52,28 @@ def test_embeddings_are_independent(monkeypatch):
     assert not provider.model_enabled() and provider.embeddings_enabled()
 
 
+def test_conversation_uses_text_and_actual_history(monkeypatch):
+    configure(monkeypatch)
+    async def post(url, body, headers):
+        assert body['reasoning'] == {'enabled': False}
+        assert 'JSON' not in body['messages'][0]['content']
+        assert body['messages'][1] == {'role':'user','content':'Tell me about fish'}
+        assert body['messages'][-1]['content'] == 'How do they breathe?'
+        return {'choices':[{'finish_reason':'stop','message':{'content':'Fish use **gills**.','reasoning':'private'}}]}
+    monkeypatch.setattr(provider,'post_json',post)
+    answer=asyncio.run(provider.chat_text('Answer simply',{'question':'How do they breathe?', 'history':[{'role':'user','content':'Tell me about fish'}]}))
+    assert answer == 'Fish use **gills**.'
+
+
+def test_conversation_never_uses_reasoning_as_answer(monkeypatch):
+    configure(monkeypatch)
+    async def post(*args):
+        return {'choices':[{'finish_reason':'stop','message':{'content':None,'reasoning':'private'}}]}
+    monkeypatch.setattr(provider,'post_json',post)
+    with pytest.raises(provider.ModelUnavailable):
+        asyncio.run(provider.chat_text('Answer',{'question':'Hi'}))
+
+
 def test_rate_limit_sanitized_without_retries(monkeypatch):
     configure(monkeypatch)
     calls=[]
