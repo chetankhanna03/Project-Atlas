@@ -1,4 +1,5 @@
 import operator
+import asyncio
 import re
 import time
 import uuid
@@ -8,6 +9,7 @@ from app.ai.schemas import ChatRequest, ChatResponse, Plan, AgentResult, Claim, 
 from app.ai.planner import make_plan, effective_question
 from app.ai.agents import run_agent
 from app.ai import provider, knowledge
+from app.ai import support
 from app.config import settings
 
 SYNTHESIS = '''You are Atlas, a scientific ocean-data assistant. Answer the user's question
@@ -31,6 +33,8 @@ bibliography entries. Never treat a paper's reference list as its own findings.
 Put citations ONLY in evidence_ids (e.g. ["E1"]), never inside claim.text.
 For definition questions, lead with the definition, then supported context or impacts.
 Each claim should express one supported factual statement. Do not pad the answer.
+For observations, prefer the supplied concise source sentences. Preserve their exact
+numbers and qualifications; do not invent rounded ranges or group taxa by unstated ecology.
 Do not number paragraphs or add unsupported quantities. Use cautious language for
 associations; do not present universal causal claims. Respond using schema.'''
 
@@ -55,7 +59,7 @@ def normalize_claims(claims):
                   evidence_ids=list(dict.fromkeys(claim.evidence_ids + re.findall(r'\[(E\d+)\]', claim.text)))) for claim in claims]
 
 
-def grounded(claims, evidence):
+def basic_grounded(claims, evidence):
     lookup = {item.id: item for item in evidence}
     for claim in claims:
         if any(key not in lookup for key in claim.evidence_ids):
@@ -71,6 +75,10 @@ def grounded(claims, evidence):
         if re.search(r'\[[^\]]+\]', claim.text):
             return False
     return True
+
+
+def grounded(claims, evidence):
+    return basic_grounded(claims, evidence) and all(support.local_check(claim, evidence)[0] == 'SUPPORTED' for claim in claims)
 
 
 def extractive_claims(evidence, question):
@@ -97,7 +105,7 @@ def extractive_claims(evidence, question):
 
 
 async def synthesize(request, plan, results):
-    validation = {'attempts': [], 'passed': False, 'checks': 'citation IDs, quantities and restricted assertions; not a full entailment proof'}
+    validation = {'attempts': [], 'passed': False, 'checks': 'IDs, quantities, provenance type, exact sentence support or independent model entailment review with source excerpts; fallible, not a scientific proof'}
     results = sorted(results, key=lambda result: ['ocean','fisheries','biodiversity','research'].index(result.domain))
     evidence, visualizations = [], []
     for result in results:
@@ -130,29 +138,53 @@ async def synthesize(request, plan, results):
                 payload = {'question': question, 'research_question': plan.research_query, 'scope': plan.scope.model_dump(mode='json'),
                      'evidence': [{'id': item.id, 'text': item.text[:2000], 'title': item.title, 'kind': item.kind,
                                    'source': item.source, 'doi': item.doi, 'page': item.page,
-                                   'metadata': item.metadata} for item in evidence[:16]], 'limitations': limitations}
-                generated = await provider.generate(SYNTHESIS, payload, GeneratedAnswer)
+                                   'retrieved_at': item.retrieved_at, 'source_last_updated': item.source_last_updated} for item in evidence[:16]], 'limitations': limitations}
+                generated = await asyncio.wait_for(provider.generate(SYNTHESIS, payload, GeneratedAnswer), timeout=50)
                 generated.claims = normalize_claims(generated.claims)
-                validation['attempts'].append({'passed': grounded(generated.claims, evidence[:16]), 'claims': generated.model_dump()['claims']})
-                if not grounded(generated.claims, evidence[:16]):
-                    generated = await provider.generate(SYNTHESIS, {**payload,
+                reviews = await support.verify(generated.claims, evidence[:16], basic_grounded)
+                accepted = all(row['status'] == 'SUPPORTED' for row in reviews)
+                validation['attempts'].append({'passed': accepted, 'claims': generated.model_dump()['claims'], 'support': reviews})
+                if not any(row['status'] == 'SUPPORTED' for row in reviews):
+                    generated = await asyncio.wait_for(provider.generate(SYNTHESIS, {**payload,
                         'revision_request': 'Rewrite using only supported statements. Citation IDs belong only in evidence_ids. No bracket citations, paragraph numbering, unsupported numbers, causal assertions or forecasts.',
-                        'draft': generated.model_dump()}, GeneratedAnswer)
+                        'support_review': reviews, 'draft': generated.model_dump()}, GeneratedAnswer), timeout=35)
                     generated.claims = normalize_claims(generated.claims)
-                    validation['attempts'].append({'passed': grounded(generated.claims, evidence[:16]), 'claims': generated.model_dump()['claims']})
-                if grounded(generated.claims, evidence[:16]):
+                    reviews = await support.verify(generated.claims, evidence[:16], basic_grounded)
+                    accepted = all(row['status'] == 'SUPPORTED' for row in reviews)
+                    validation['attempts'].append({'passed': accepted, 'claims': generated.model_dump()['claims'], 'support': reviews})
+                if accepted:
                     claims, mode = generated.claims, 'model'
                 else:
-                    claims = [claim for claim in generated.claims if grounded([claim], evidence[:16])]
+                    claims = [claim for claim,review in zip(generated.claims,reviews) if review['status'] == 'SUPPORTED']
                     mode = 'model' if claims else 'evidence_only'
                     status = 'partial'
-                    limitations.append('Some generated claims failed citation or quantity checks and were omitted.')
-            except provider.ModelUnavailable:
+                    limitations.append('Some generated claims failed citation, quantity or evidence-support checks and were omitted; uncertain claims were also withheld.')
+            except (provider.ModelUnavailable, asyncio.TimeoutError):
                 limitations.append('Answer model unavailable; a supported answer could not be generated.')
         else:
             limitations.append('No answer model configured; selected sources are available for inspection.')
             claims = extractive_claims([e for e in evidence if e.kind != 'literature'], question)
-        answer = '\n\n'.join(claim.text + ' ' + ' '.join(f'[{key}]' for key in claim.evidence_ids) for claim in claims)
+        if not claims:
+            # Verified provider summaries are useful answers, not raw JSON/passages.
+            # Never apply this fallback to literature or imported records.
+            seen_domains = set()
+            for item in evidence:
+                summary = item.metadata.get('observation_summary') if item.kind == 'observation' else None
+                if summary and item.domain not in seen_domains:
+                    sentence = re.split(r'(?<=[.!?])\s+', summary)[0]
+                    candidate = Claim(text=sentence, evidence_ids=[item.id])
+                    if grounded([candidate], [item]):
+                        claims.append(candidate); seen_domains.add(item.domain)
+            if claims:
+                mode, status = 'evidence_only', 'partial'
+                limitations.append('Only verified observation summaries are shown; a supported literature synthesis was not available.')
+        def basis(claim):
+            kinds = {item.kind for item in evidence if item.id in claim.evidence_ids}
+            if len(plan.domains) < 2:
+                return ''
+            label = 'Literature' if kinds == {'literature'} else 'Computed' if kinds == {'computed'} else 'Retrieved observations' if kinds == {'observation'} else 'Evidence'
+            return label + ': '
+        answer = '\n\n'.join(basis(claim) + claim.text + ' ' + ' '.join(f'[{key}]' for key in claim.evidence_ids) for claim in claims)
         if not claims:
             status = 'no_data'
             answer = 'I could not generate a sufficiently supported answer from the available evidence. The selected sources can be inspected below; no unsupported answer has been substituted.'
@@ -160,7 +192,7 @@ async def synthesize(request, plan, results):
             limitations.append('Independent sources have not been spatially/temporally joined. No cross-domain correlation or causal relationship has been established.')
         if mode == 'model':
             limitations.append('Citations and quantities are checked automatically; scientific interpretation still requires review.')
-    validation['passed'] = bool(claims) and grounded(claims, evidence)
+    validation['passed'] = bool(claims) and (mode == 'model' or grounded(claims, evidence))
     used = {key for claim in claims for key in claim.evidence_ids}
     diagnostics = None
     if settings.development_mode:
@@ -214,6 +246,17 @@ graph = build_graph()
 
 async def chat(request: ChatRequest):
     started = time.monotonic()
+    from app.ai.conversation import is_conversation, converse
+    if is_conversation(request):
+        response = await converse(request)
+        response.elapsed_ms = round((time.monotonic() - started) * 1000)
+        return response
+    if request.answer_mode == 'research' and not request.document_ids:
+        # Explicit research mode also accepts short conversational follow-ups.
+        from app.ai.planner import general_explanation, rule_plan
+        if not general_explanation(request.message) and not rule_plan(request).domains:
+            previous = next((t.content for t in reversed(request.history) if t.role == 'user'), '')
+            request = request.model_copy(update={'message': ('Find scientific literature to answer: ' + previous + '\nFollow-up: ' + request.message)[-2000:]})
     # No global conversation memory or shared checkpointer: histories remain request-scoped.
     result = await graph.ainvoke({'request': request, 'results': []}, config={'recursion_limit': 6})
     response = result['response']

@@ -736,38 +736,20 @@ export function Analytics({
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [custom, setCustom] = useState<any>(null);
-  const sst = snapshot?.results.find((r) => r.layer === "sst")?.data,
+  const argo = snapshot?.results.find((r) => r.layer === "argo")?.data,
     effort = snapshot?.results.find((r) => r.layer === "gfw")?.data;
-  const byDay = new Map<string, number>();
-  for (const r of effort?.results || [])
-    byDay.set(r.date, (byDay.get(r.date) || 0) + r.apparent_fishing_hours);
-  const pairs = (sst?.data || [])
-    .filter((r: any) => byDay.has(r.time.slice(0, 10)))
-    .map((r: any) => ({
-      date: r.time.slice(0, 10),
-      x: r.sst_celsius,
-      y: byDay.get(r.time.slice(0, 10)),
-    }));
+  useEffect(() => { setResult(null); setError(""); }, [snapshot]);
   async function compare() {
     setBusy(true);
     setError("");
     setResult(null);
     try {
       setResult(
-        await api("/science/compare", {
+        await api(custom ? "/science/compare" : "/science/ocean-fisheries", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
-            custom || {
-              x_label: "SST at selected centre (C)",
-              y_label: "Regional apparent fishing hours",
-              spatial_scope:
-                "Point SST and regional effort, aligned by date only; spatial resolutions differ.",
-              sources: [sst?.provenance?.url, effort?.provenance?.url].filter(
-                Boolean,
-              ),
-              pairs,
-            },
+            custom || { argo, gfw: effort },
           ),
         }),
       );
@@ -788,7 +770,7 @@ export function Analytics({
       <section className="domain-card">
         <h2>Temperature and fishing activity</h2>
         <p>
-          Compare point SST with regional AIS apparent fishing effort on dates
+          Compare loaded near-surface ARGO profile samples with regional AIS apparent fishing effort on dates
           returned by both sources.
         </p>
         <Notice>
@@ -799,12 +781,12 @@ export function Analytics({
         </Notice>
         <div className="domain-form">
           <button className="text-link" onClick={onExplore}>
-            Load SST and fishing activity in Explore
+            Load ARGO and fishing activity in Explore
           </button>
-          <span>{pairs.length} overlapping dates</span>
+          <span>Exact UTC-date overlap; at least three dates required</span>
           <button
             className="atlas-primary"
-            disabled={busy || (!custom && pairs.length < 3)}
+            disabled={busy || (!custom && (!argo || !effort))}
             onClick={compare}
           >
             {busy ? "Calculating..." : "Generate comparison"}
@@ -856,6 +838,8 @@ export function Analytics({
       </section>
       {result && (
         <section className="domain-card">
+          {result.message && <Notice>{result.message}</Notice>}
+          {result.data_basis && <><h3>Data basis</h3><p>Observed: {result.data_basis.observed.join('; ')}.</p><p>Literature: none used in this calculation.</p><p>Computed: {result.data_basis.computed.join('; ')}.</p><p>Bounds (W/S/E/N): {result.bounds.join(', ')} ? Requested dates: {result.date_range.join(' to ')} ? Profiles used: {result.profiles_used}</p></>}
           <h2>
             {result.x_label} / {result.y_label}
           </h2>
@@ -863,15 +847,15 @@ export function Analytics({
             {result.n} aligned pairs / Pearson r:{" "}
             <strong>
               {result.pearson_r == null
-                ? "Undefined (constant variable)"
+                ? "Not calculated (insufficient coverage or constant variable)"
                 : result.pearson_r.toFixed(3)}
             </strong>
           </p>
-          <Scatter
+          {result.pairs.length > 0 && <Scatter
             pairs={result.pairs}
             xLabel={result.x_label}
             yLabel={result.y_label}
-          />
+          />}
           <Notice>
             {result.method} {result.spatial_scope}{" "}
             {result.limitations.join(" ")}

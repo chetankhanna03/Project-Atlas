@@ -10,6 +10,8 @@ class StrictModel(BaseModel):
 
 
 class Scope(StrictModel):
+    obis_period: Literal['all_time', 'selected'] = 'selected'
+    selected_datasets: list[Literal['argo', 'obis', 'sst', 'gfw', 'copernicus']] = Field(default_factory=list, max_length=5)
     region: str | None = Field(None, max_length=100)
     latitude: float | None = Field(None, ge=-89.99, le=89.99)
     longitude: float | None = Field(None, ge=-179.99, le=180)
@@ -39,6 +41,7 @@ class Turn(StrictModel):
 
 
 class ChatRequest(StrictModel):
+    answer_mode: Literal['auto', 'conversation', 'research'] = 'auto'
     message: str = Field(min_length=1, max_length=2000)
     history: list[Turn] = Field(default_factory=list, max_length=8)
     context: Scope | None = None
@@ -70,11 +73,12 @@ class Evidence(StrictModel):
     authors: list[str] = Field(default_factory=list)
     year: int | None = None
     doi: str | None = None
-    kind: Literal['observation', 'literature', 'local_unverified', 'metadata'] = 'observation'
+    kind: Literal['observation', 'literature', 'local_unverified', 'metadata', 'computed'] = 'observation'
     metadata: dict = Field(default_factory=dict)
 
 
 class AgentResult(StrictModel):
+    source_statuses: list[dict] = Field(default_factory=list)
     retrieval_diagnostics: list[dict] = Field(default_factory=list)
     domain: Domain
     status: Literal['ok', 'partial', 'no_data', 'unavailable', 'needs_input', 'unsupported']
@@ -98,7 +102,7 @@ class ChatResponse(StrictModel):
     request_id: str
     status: Literal['ok', 'partial', 'no_data', 'needs_input', 'unavailable']
     answer: str
-    mode: Literal['model', 'evidence_only']
+    mode: Literal['model', 'evidence_only', 'conversation']
     plan: Plan
     claims: list[Claim] = Field(default_factory=list)
     citations: list[Evidence] = Field(default_factory=list)

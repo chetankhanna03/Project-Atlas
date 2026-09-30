@@ -5,6 +5,7 @@ export type ActiveTab =
   | 'explore' 
   | 'analytics' 
   | 'map' 
+  | 'graph'
   | 'sources' 
   | 'about' | 'home' | 'biodiversity' | 'fisheries' | 'admin';
 

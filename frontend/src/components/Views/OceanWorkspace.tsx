@@ -33,6 +33,8 @@ type Point = {
   color: string;
 };
 type Query = {
+  obisPeriod?: 'all_time' | 'selected';
+  region?: string;
   west: number;
   south: number;
   east: number;
@@ -45,6 +47,8 @@ type Query = {
 };
 const today = () => new Date().toISOString().slice(0, 10);
 const initial: Query = {
+  obisPeriod: 'all_time',
+  region: "Arabian Sea",
   west: 50,
   south: 5,
   east: 78,
@@ -88,8 +92,7 @@ export async function loadLayer(
     path = "/oceanography/argo/gdac";
   }
   if (layer === "obis") {
-    p.delete("start");
-    p.delete("end");
+    if (q.obisPeriod === 'all_time') { p.delete('start'); p.delete('end'); }
     p.set("limit", "100");
     if (cursor != null) p.set("after", String(cursor));
     if (q.species.trim()) p.set("species", q.species.trim());
@@ -119,7 +122,7 @@ export async function loadLayer(
       throw new Error(
         typeof data.detail === "string"
           ? data.detail
-          : `Source unavailable (${response.status}).`,
+          : `${names[layer]}: ${String(data.detail?.code || 'source_unavailable').replaceAll('_', ' ')} (${response.status}).`,
       );
     return { layer, data };
   } catch (error) {
@@ -135,12 +138,16 @@ function Series({
   title,
   unit,
   rows,
+  detail,
 }: {
   title: string;
+  detail?: string;
   unit: string;
   rows: { x: string; y: number }[];
 }) {
-  if (!rows.length) return null;
+  if (rows.length < 2) return null;
+  const profile = rows[0].x.endsWith('dbar');
+  unit = unit === 'degree_Celsius' ? '°C' : unit;
   const min = Math.min(...rows.map((r) => r.y)),
     max = Math.max(...rows.map((r) => r.y));
   const xs = rows.map((r) =>
@@ -157,6 +164,9 @@ function Series({
   return (
     <article className="rounded-xl border bg-white p-5">
       <h3 className="font-semibold">{title}</h3>
+      {detail && <p className="text-xs text-slate-600">{detail}</p>}
+      <p className="text-xs text-slate-600">Vertical axis: {unit}. {profile ? 'Horizontal axis: pressure (dbar), increasing with depth. This is not a trend over time.' : 'Horizontal axis: observation date (UTC).'}</p>
+      <p className="text-xs text-slate-500">Range: {min.toFixed(3)}–{max.toFixed(3)} {unit}. Span: {(max-min).toFixed(3)} {unit}. Each chart uses its own scale.</p>
       <p className="text-xs text-slate-500 my-1">
         {rows.length} returned values · {unit}
       </p>
@@ -193,7 +203,7 @@ function Series({
           <table className="w-full text-left">
             <thead>
               <tr>
-                <th>Time / pressure</th>
+                <th>{profile ? 'Pressure (dbar)' : 'Observation date (UTC)'}</th>
                 <th>{unit}</th>
               </tr>
             </thead>
@@ -236,6 +246,8 @@ export function OceanWorkspace({
       "gfw",
       "copernicus",
     ]);
+  const [showQuestionable, setShowQuestionable] = useState(false);
+  const questionableCount = results.filter(r=>r.layer==='obis').flatMap(r=>r.data?.results || []).filter(p=>p.quality?.map_eligible !== true).length;
   useEffect(() => {
     if (loaded) onSnapshot?.({ query: applied, results, loaded });
   }, [loaded, results, applied, onSnapshot]);
@@ -247,7 +259,7 @@ export function OceanWorkspace({
           domain === "biodiversity"
             ? ["obis"]
             : domain === "fisheries"
-              ? ["gfw", "sst"]
+              ? ["gfw", "argo"]
               : ["argo", "sst"],
       }));
   }, [domain]);
@@ -268,13 +280,22 @@ export function OceanWorkspace({
     north: q.north,
   };
   function selectArea(area: Area, method: string, focus = false) {
-    setQ((previous) => ({ ...previous, ...area }));
+    setQ((previous) => ({ ...previous, ...area, region: ["Arabian Sea", "Bay of Bengal", "Indian Ocean"].includes(method) ? method : previous.region }));
     setAreaMethod(method);
     setError("");
     setDrawing(false);
     if (focus) setFocusArea(area);
   }
   function clearArea() {
+    controller.current?.abort();
+    controller.current = null;
+    setBusy(false);
+    setDrawing(false);
+    setResults([]);
+    setLoaded("");
+    setShowQuestionable(false);
+    saved = null;
+    onSnapshot?.({ query: applied, results: [], loaded: "" });
     const area = {
       west: applied.west,
       south: applied.south,
@@ -283,7 +304,6 @@ export function OceanWorkspace({
     };
     setQ((previous) => ({ ...previous, ...area }));
     setAreaMethod("");
-    setFocusArea(area);
     setError("");
   }
   const update = (key: keyof Query, value: any) =>
@@ -367,7 +387,6 @@ export function OceanWorkspace({
     }
   }
   useEffect(() => {
-    if (!saved) void refresh();
     return () => {
       controller.current?.abort();
       controller.current = null;
@@ -376,6 +395,8 @@ export function OceanWorkspace({
   const points: Point[] = [],
     series: {
       title: string;
+      detail?: string;
+      group?: string;
       unit: string;
       rows: { x: string; y: number }[];
     }[] = [];
@@ -394,24 +415,28 @@ export function OceanWorkspace({
             color: colors.argo,
           });
         series.push({
-          title: `${p.float_id}: ${p.parameter} profile`,
+          title: `Float ${p.float_id}: ${p.parameter} · cycle ${p.cycle ?? 'not supplied'}`,
+          group: `argo:${p.float_id}:${p.parameter}`,
+          detail: `Observed: ${p.time || 'not supplied'} | Location: ${p.latitude}, ${p.longitude}`,
           unit: p.unit,
           rows: p.levels.map((v: any) => ({
-            x: `${v.pressure_dbar.toFixed(1)} dbar`,
+            x: `${v.pressure_dbar} dbar`,
             y: v.value,
           })),
         });
       }
     if (result.layer === "obis" && visible.includes("obis"))
-      for (const p of d.results || [])
+      for (const p of d.results || []) {
+        if (!showQuestionable && p.quality?.map_eligible !== true) continue;
         points.push({
           lat: p.latitude,
           lon: p.longitude,
-          label: p.scientific_name || "Unidentified taxon",
-          detail: `Observed: ${p.event_date || "date not supplied"} | ${p.license || "see source license"}`,
+          label: `OBIS reported taxon: ${p.scientific_name || "Unidentified taxon"}`,
+          detail: `Record: ${p.record_id || 'not supplied'} | Observed: ${p.event_date || "date not supplied"} | ${p.license || "see source license"} | ${p.quality?.map_eligible === true ? 'No location warning reported by OBIS; not independently verified.' : (p.quality?.reasons || ['Location quality not checked']).join(' ')} | Source flags: ${(p.quality?.flags || []).join(', ') || 'none supplied'} | Coordinate uncertainty: ${p.coordinate_uncertainty_m == null ? 'not supplied' : p.coordinate_uncertainty_m + ' m'}`,
           source: d.provenance?.url,
-          color: colors.obis,
+          color: p.quality?.map_eligible === true ? colors.obis : '#b45309',
         });
+      }
     if (result.layer === "sst" && d.data?.length) {
       const p = d.data.at(-1);
       if (visible.includes("sst"))
@@ -465,6 +490,25 @@ export function OceanWorkspace({
       });
     }
   }
+  const seenSeries = new Set<string>();
+  const uniqueSeries = series.filter(s => {
+    const position = (x: string) => x.endsWith('dbar') ? parseFloat(x) : Date.parse(x);
+    s.rows = s.rows.filter(r => Number.isFinite(r.y) && Number.isFinite(position(r.x)))
+      .sort((a,b) => position(a.x) - position(b.x));
+    const key = JSON.stringify([s.title, s.detail, s.unit, s.rows]);
+    if (s.rows.length < 2 || seenSeries.has(key)) return false;
+    seenSeries.add(key);
+    return true;
+  });
+  const overview = new Map<string, typeof uniqueSeries[number]>();
+  const span = (s: typeof uniqueSeries[number]) => parseFloat(s.rows.at(-1)!.x) - parseFloat(s.rows[0].x);
+  for (const s of uniqueSeries) {
+    const key = s.group || s.title;
+    const previous = overview.get(key);
+    if (!previous || (s.group && span(s) > span(previous))) overview.set(key, s);
+  }
+  const primarySeries = [...overview.values()];
+  const extraSeries = uniqueSeries.filter(s => !primarySeries.includes(s));
   function download() {
     const blob = new Blob(
       [
@@ -697,6 +741,13 @@ export function OceanWorkspace({
                 </span>
               </label>
             ))}
+            {q.layers.includes('obis') && <label className="text-sm block my-3">OBIS observation period
+              <select aria-label="OBIS observation period" className="block w-full rounded-lg border p-2 mt-1" value={q.obisPeriod || 'selected'} onChange={e=>update('obisPeriod',e.target.value)}>
+                <option value="all_time">All recorded dates (historical inventory)</option>
+                <option value="selected">Use selected date range</option>
+              </select>
+              <small className="block mt-2 text-slate-600">OBIS is a historical occurrence archive, not a live census. Historical records are not contemporary matches to ARGO or fishing effort.</small>
+            </label>}
             <button
               disabled={busy}
               onClick={() => void refresh()}
@@ -724,8 +775,8 @@ export function OceanWorkspace({
           <details className="coverage-note">
             <summary>What these sources can tell you</summary>
             <p>
-              Dates apply to ARGO and fishing effort. OBIS shows an undated
-              occurrence sample. SST shows the latest seven available days at
+              Dates apply to ARGO and fishing effort. OBIS uses its own observation-period setting.
+              Historical OBIS records may not cover recent dates. SST shows the latest seven available days at
               the area centre. Fishing effort is a regional aggregate, not
               vessel positions.
             </p>
@@ -769,8 +820,11 @@ export function OceanWorkspace({
                 }
                 onClick={() =>
                   onAskAtlas(
-                    `Help me understand ocean conditions and marine biodiversity within west ${applied.west}, south ${applied.south}, east ${applied.east}, north ${applied.north}, during ${applied.start} to ${applied.end}. Retrieve supporting evidence and explain coverage limitations; do not assume the selected datasets establish a trend.`,
+                    `Help me understand ocean conditions and marine biodiversity within west ${applied.west}, south ${applied.south}, east ${applied.east}, north ${applied.north}, during ${applied.start} to ${applied.end}.${applied.obisPeriod === 'all_time' ? ' For OBIS, use all recorded dates as a historical inventory.' : ''} Retrieve supporting evidence and explain coverage limitations; do not assume the selected datasets establish a trend.`,
                     {
+                      region: applied.region || null,
+                      selected_datasets: applied.layers,
+                      obis_period: applied.obisPeriod || 'selected',
                       bbox: [
                         applied.west,
                         applied.south,
@@ -790,7 +844,12 @@ export function OceanWorkspace({
             )}
           </div>
           <div className="evidence-cards">
-            {results.map((r) => (
+            {results.map((r) => {
+              const obisRows = r.layer === 'obis' ? r.data?.results || [] : [];
+              const eligible = obisRows.filter((p: any) => p.quality?.map_eligible === true).length;
+              const hidden = obisRows.length - eligible;
+              const allOnLand = obisRows.length > 0 && obisRows.every((p: any) => p.quality?.flags?.includes('ON_LAND'));
+              return (
               <article key={r.layer} className={`evidence-card ${r.layer}`}>
                 <h2 className="text-sm font-semibold">{names[r.layer]}</h2>
                 <p
@@ -806,15 +865,21 @@ export function OceanWorkspace({
                         : r.layer === "gfw"
                           ? `${r.data.total_apparent_fishing_hours.toFixed(2)} hours`
                           : r.layer === "obis"
-                            ? `${(r.data.results || []).length} records shown`
+                            ? allOnLand ? 'Locations flagged on land' : hidden > 0 && eligible === 0 ? 'Locations need review' : `${eligible} records eligible for map`
                             : `${(r.data.profiles || r.data.results || r.data.data || []).length} ${r.layer === "argo" ? "profiles" : "records"}`}
                 </p>
                 {r.layer === "obis" &&
                   r.data &&
                   r.data.status !== "unavailable" && (
                     <p className="text-xs text-slate-600 mt-2">
-                      {r.data.total_matching != null ? `${r.data.total_matching.toLocaleString()} matching occurrences reported by OBIS.` : "Total matching occurrences not supplied by OBIS."}
-                      {" "}100 records per page; load more below. Occurrences are not fish abundance.
+                      {obisRows.length === 0 ? 'No occurrence locations were loaded for this query.' : allOnLand
+                        ? 'OBIS flags all loaded locations as on land. These are hidden by default. Try an ocean or coastal area, then click Load data.'
+                        : hidden > 0
+                          ? `${hidden} loaded locations are flagged or unchecked and hidden by default. You can inspect them using “Show flagged / unchecked OBIS locations” on the map.`
+                          : 'Loaded locations pass the available source checks; this is not independent coastline verification.'}
+                      {' '}Occurrences are not fish abundance.
+                      <strong className="block mt-2">{applied.obisPeriod === 'all_time' ? 'Historical inventory · all recorded dates' : `Observation dates: ${applied.start} to ${applied.end}`}</strong>
+                      {r.data.status === 'no_data' && applied.obisPeriod !== 'all_time' && <span className="block mt-2">No occurrences match this date range. Choose “All recorded dates” under OBIS observation period, then click Load data to explore historical records.</span>}
                     </p>
                   )}
                 {r.layer === "argo" && r.data && <p className="text-xs text-slate-600 mt-2">
@@ -831,6 +896,11 @@ export function OceanWorkspace({
                       Source and coverage
                     </summary>
                     <p>Status: {r.data.status}</p>
+                    {r.layer === 'obis' && <p className="mt-1">
+                      {obisRows.length} raw records loaded; {eligible} eligible for the default map; {hidden} flagged or unchecked.
+                      {' '}{r.data.total_matching != null ? `${r.data.total_matching.toLocaleString()} matching occurrences reported by OBIS.` : 'Total matching occurrences not supplied by OBIS.'}
+                      {' '}Up to 100 records per page. Map visibility also depends on layer selection and the display limit.
+                    </p>}
                     {(r.data.limitations || []).map((s: string) => (
                       <p className="mt-1" key={s}>
                         {s}
@@ -862,7 +932,7 @@ export function OceanWorkspace({
                   </details>
                 )}
               </article>
-            ))}
+            );})}
           </div>
         </div>
         {!busy && !results.length && (
@@ -905,6 +975,7 @@ export function OceanWorkspace({
                 {Math.min(points.length, 2000)} of {points.length} loaded locations mapped
               </span>
             </div>
+            <label className="block px-4 py-2 text-xs text-slate-600"><input type="checkbox" checked={showQuestionable} onChange={e=>setShowQuestionable(e.target.checked)}/> Show flagged / unchecked OBIS locations ({questionableCount}) · amber markers require review. Purple markers are reported taxa, not necessarily fish.</label>
             <div
               style={{
                 height: "clamp(380px, 52vh, 580px)",
@@ -993,9 +1064,9 @@ export function OceanWorkspace({
             </div>
             <span className="muted-note">Measured values, with context</span>
           </div>
-          {series.length ? (
+          {uniqueSeries.length ? (
             <div className="grid lg:grid-cols-2 gap-4">
-              {series.map((s, i) => (
+              {primarySeries.map((s, i) => (
                 <Series key={i} {...s} />
               ))}
             </div>
@@ -1006,6 +1077,11 @@ export function OceanWorkspace({
             </p>
           )}
         </section>
+        {uniqueSeries.some(s => s.group) && <p className="text-xs text-slate-600">Overview shows the widest loaded pressure range per float and measurement. Exact duplicate charts and series with fewer than two valid points are omitted.</p>}
+        {extraSeries.length > 0 && <details className="border rounded-xl p-4">
+          <summary className="cursor-pointer">View {extraSeries.length} additional distinct profiles / series</summary>
+          <div className="grid lg:grid-cols-2 gap-4 mt-3">{extraSeries.map((s,i) => <Series key={i} {...s}/>)}</div>
+        </details>}
         {points.length > 0 && (
           <details className="records-section bg-white border rounded-xl p-4 text-sm">
             <summary className="cursor-pointer font-medium">

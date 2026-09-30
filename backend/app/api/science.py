@@ -12,6 +12,12 @@ from app.database import Base, get_db
 from app.security import require_admin
 
 router = APIRouter(prefix='/api/science', tags=['molecular / morphology / analytics'])
+from app.services.cross_domain import LoadedComparison, analyze
+
+
+@router.post('/ocean-fisheries')
+def ocean_fisheries(data: LoadedComparison):
+    return analyze(data)
 
 
 class ScienceRecord(Base):

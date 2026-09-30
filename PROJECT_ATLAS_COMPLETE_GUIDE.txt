@@ -1,0 +1,998 @@
+PROJECT ATLAS — COMPLETE MVP GUIDE
+Mapping the Future of Oceans with Agentic AI
+Prepared: 30 September 2026
+
+This guide describes the actual local implementation at the end of the MVP work.
+It is based on the supplied project brief, source code, project documentation,
+local readiness/configuration responses, and development checks. It distinguishes
+implemented features from configured services, successful tests, and future ideas.
+It contains no API keys, passwords, database credentials, or paper excerpts.
+External providers can change; this is an implementation snapshot, not a promise
+that every provider will always be available. Older repository documents sometimes
+describe earlier versions; the recent changes are included here.
+
+CONTENTS
+1. Project identity and problem
+2. Users and value
+3. What the MVP delivers
+4. Product walkthrough
+5. Architecture and request flow
+6. Technology stack
+7. Sources and what their data mean
+8. Geographic selection and data quality
+9. Charts and deduplication
+10. Ask Atlas conversation and agents
+11. Literature, embeddings, OKF and RAG
+12. Citations and answer validation
+13. Knowledge graph
+14. Analytics and scientific boundaries
+15. eDNA, otoliths and local imports
+16. Storage and current configuration
+17. APIs and codebase map
+18. Running and maintaining the project
+19. Security, privacy and deployment
+20. Verification and known limitations
+21. Demo, presentation and common questions
+22. Future work and glossary
+
+
+1. PROJECT IDENTITY AND PROBLEM
+==============================
+
+Project Atlas is an AI-powered unified ocean intelligence platform. It lets a user
+explore selected marine observations, inspect their provenance, ask questions, and
+retrieve scientific literature from one web interface.
+
+The supplied project context identifies the target as SIH25041:
+“AI-Driven Unified Data Platform for Oceanographic, Fisheries, and Molecular
+Biodiversity Insights,” associated with the Ministry of Earth Sciences and the
+Smart India Hackathon 2025. This identification comes from the supplied brief;
+this guide is not an independent audit of the official competition statement.
+
+The practical problem is fragmentation. Temperature profiles, fishing activity,
+species sightings, taxonomy, molecular sample records and research papers live in
+different systems, use different formats, and answer different kinds of questions.
+Someone investigating a region must otherwise locate each source, understand its
+API or files, filter it, reconcile dates and coordinates, and interpret results.
+
+Atlas reduces the effort required to find, inspect and discuss that evidence.
+It preserves distinctions between datasets instead of treating all marine numbers
+as interchangeable. A sighting is not a fish-population estimate. Fishing hours
+are not tonnes of catch. An old paper is not a measurement taken today.
+
+The design is a query-driven integration layer. Atlas does not download and merge
+the entire world's marine data into one database. It maintains a small research
+library and discovery metadata, then retrieves bounded data for a user's query.
+
+Example problem:
+“What ocean conditions and fishing activity are available for this selected area,
+which organisms have been recorded there, and what does the literature say?”
+
+Atlas can bring separately attributed evidence together. The MVP cannot conclude
+that temperature caused fish mortality merely because those datasets were loaded.
+
+
+2. USERS AND VALUE
+==================
+
+Intended users include marine researchers, oceanographers, biodiversity and
+fisheries analysts, conservation teams, government analysts, educators and students.
+
+The immediate value is a simpler workflow:
+  - Choose a place visually rather than writing a geographic API query.
+  - Retrieve several relevant sources from one interface.
+  - See which sources succeeded, failed or returned no matches.
+  - Inspect measurements, source dates and limitations.
+  - Ask plain-language questions or request literature-backed explanations.
+  - Follow the records and citations behind an answer.
+
+Potential benefits such as faster research are product goals. We have not run a
+formal user study or measured a percentage improvement in research productivity.
+
+
+3. WHAT THE MVP DELIVERS
+========================
+
+Implemented:
+  - React web application with domain navigation and responsive layouts.
+  - Interactive Leaflet GIS map and rectangular area selection.
+  - Preset regions, manual bounds and visible-map-area selection.
+  - On-demand source retrieval, paging, source status and provenance.
+  - ARGO temperature/salinity profiles and OBIS occurrence exploration.
+  - Fishing-effort integration and adapters for additional providers.
+  - Profile/time-series charts with contextual labels.
+  - Ask Atlas: Auto, Conversation and Research answer modes.
+  - Selective ocean, fisheries, biodiversity and research agent workflows.
+  - Scientific library ingestion, retrieval, local semantic reranking and citations.
+  - Interactive evidence/knowledge graph and WoRMS name resolution.
+  - A bounded descriptive ARGO/fishing-effort comparison.
+  - Metadata workflows for eDNA and otolith records.
+  - Backend validation, protected writes, tests and local launch scripts.
+
+“Implemented connector” does not mean “enabled with credentials,” and neither
+means “successfully answering every request.” The interface must expose these
+differences. This is an MVP for exploration and evidence inspection, not a complete
+production ocean-monitoring or ecological-prediction platform.
+
+
+4. PRODUCT WALKTHROUGH
+======================
+
+HOME
+Introduces the platform and gives entry points into exploration and domain views.
+It is the orientation page, not an independently measured ocean-health score.
+
+EXPLORE
+The main workspace combines a query panel, map, evidence cards, charts and records.
+Choose sources and a geographic area, then explicitly click Load data. Changing
+the selection does not automatically send provider requests.
+
+ASK ATLAS / FLOATCHAT
+These names refer to the same chat experience. Ask Atlas is the current visible
+product name; FloatChat remains in component names and earlier documentation.
+Users can ask simple questions, continue a conversation, or request sourced research.
+
+KNOWLEDGE GRAPH
+Shows typed relationships derived from loaded records or a chat response. Users
+can inspect nodes, follow sources, navigate the graph and resolve taxa with WoRMS.
+
+ANALYTICS
+Provides exploratory comparisons using loaded data. It reports sample size,
+matching rules and why a calculation is unavailable when the data are unsuitable.
+
+FISHERIES
+Separates apparent fishing activity from imported landings/catch information.
+It does not pretend that AIS activity identifies catches or fish abundance.
+
+BIODIVERSITY
+Provides occurrence and taxonomy context and access to molecular/otolith metadata
+workflows. Occurrence records may represent many taxa, not just fish.
+
+DATA CATALOG
+Lists registered integrations, capabilities, requirements and source information.
+A catalog entry is not a live availability guarantee or a downloaded dataset.
+
+DATA OPERATIONS AND RESEARCH LIBRARY
+Support permitted imports and library management. Sensitive writes require the
+backend admin key. The library is shared within this local application.
+
+
+5. ARCHITECTURE AND REQUEST FLOW
+================================
+
+The frontend and backend are separate applications:
+
+  Browser: React + TypeScript
+       |
+       | /api requests through Vite's development proxy
+       v
+  FastAPI backend
+       |
+       +-- Validated source adapters --> external data services
+       +-- SQLAlchemy --> local SQLite / optional PostgreSQL
+       +-- ARGO discovery --> separate local metadata index
+       +-- Research retrieval --> library + local semantic model
+       +-- AI provider boundary --> configured language model
+       +-- LangGraph --> selected domain agents and evidence composition
+       +-- Evidence graph --> response graph / optional Neo4j persistence
+
+MAP FLOW
+Draw/select area -> extract west/south/east/north -> edit if needed -> Load data
+-> backend validates query -> independent provider requests -> normalized responses
+-> source cards, eligible map locations, charts and inspectable records.
+
+RESEARCH/DATA CHAT FLOW
+Message + recent history + selected scope -> planner -> selected agents
+-> observations and/or relevant literature -> evidence IDs -> answer generation
+-> claim support validation -> answer, citations, statuses and graph.
+
+CONVERSATION FLOW
+Message + recent history + optional scope -> conversation handler -> configured LLM
+-> general reply labelled as not source-verified. Simple greetings/thanks can be
+handled locally without a model request. No data connectors run in this mode.
+
+Source failures are isolated where supported: an unavailable SST service should
+not erase successfully retrieved ARGO observations. Responses distinguish errors
+from genuine empty results.
+
+
+6. TECHNOLOGY STACK
+===================
+
+Frontend:
+  - React 19: components, state and interface composition.
+  - TypeScript: typed request/response contracts and frontend checks.
+  - Vite 6: local server, bundling and backend proxy.
+  - Tailwind CSS 4 plus atlas.css: styling and the current visual theme.
+  - Leaflet and React Leaflet: map, tiles, markers, rectangles and popups.
+  - OpenStreetMap tiles: the base map; not the scientific observation source.
+  - Lucide icons and other UI dependencies listed in package.json.
+  - SVG chart rendering: lightweight measurement plots.
+  - Vitest/Testing Library: frontend tests.
+  - Playwright with Edge: browser checks used during development.
+
+Backend:
+  - Python 3.11+ with FastAPI and Uvicorn.
+  - Pydantic/Pydantic Settings: validated inputs, outputs and configuration.
+  - SQLAlchemy: persistence and database access.
+  - SQLite: default local application database and separate ARGO metadata index.
+  - PostgreSQL/psycopg2 and pgvector: optional configured database/vector path.
+  - HTTPX: bounded external HTTP requests.
+  - LangGraph: agent orchestration; application-owned, bounded workflows.
+  - FastEmbed with BAAI/bge-base-en-v1.5: local semantic embedding/reranking.
+  - NumPy: vector similarity and numerical support through installed dependencies.
+  - pypdf: PDF text extraction with page context.
+  - netCDF4: ARGO profile-file parsing.
+  - copernicusmarine: optional Copernicus Marine Toolbox access.
+  - Shapely: geometric operations in supported local spatial paths.
+  - Neo4j driver: optional graph persistence.
+  - pytest: backend tests and integration-contract checks.
+
+The model is accessed through a provider API. Atlas is not training Nemotron,
+building a new foundation model, or running its weights on this laptop.
+
+
+7. SOURCES AND WHAT THEIR DATA MEAN
+===================================
+
+ARGO / IFREMER CORIOLIS GDAC
+Endpoint family: https://data-argo.ifremer.fr/
+Atlas uses HTTPS rather than FTP or S3. It searches a local copy of global index
+metadata and downloads selected NetCDF files on demand. Supported core variables
+are temperature and salinity. Profiles preserve float ID, cycle, time, coordinates,
+units, pressure, quality flags and file provenance.
+US GODAE and S3 are not automatic fallback mirrors in this implementation.
+
+OBIS
+Endpoint family: https://api.obis.org/
+Returns occurrence records: an organism/taxon reported at a location and time.
+Atlas supports geographic filters, optional species/date constraints and paging.
+The historical-inventory option deliberately omits date filters. Historical records
+must not be presented as a current census. Absence of returned records does not
+prove absence of organisms.
+
+GLOBAL FISHING WATCH
+Endpoint family: https://gateway.api.globalfishingwatch.org/
+Uses authenticated reports for AIS apparent fishing effort. The result describes
+inferred activity in hours, aggregated for the requested area/time. It is not
+catch weight, biomass, a fish count, or coverage of all vessels. Individual vessel
+tracks and species-specific fishing-effort attribution are not implemented here.
+
+COPERNICUS MARINE
+Access: copernicusmarine Python Toolbox.
+The adapter requests supported model variables at a nearest grid point within a
+bounded time window. Model analysis/forecast output is distinct from direct field
+observations. Username/password configuration is required for the implemented path.
+The adapter runs with concurrency and subprocess time limits. An unsupported date
+range does not silently switch to an unrelated product.
+
+SATELLITE SST / ERDDAP
+The numerical adapter requests a point time series from the configured MUR SST
+ERDDAP service. A point sample is not a mean temperature of the selected rectangle.
+This service has timed out in prior live checks and must remain visibly unavailable
+when it fails. Recent point data do not establish a climate trend or heatwave.
+
+WoRMS
+Endpoint family: https://www.marinespecies.org/rest/
+Exact scientific-name and accepted-name resolution, including Aphia identifiers.
+Taxonomic resolution does not independently verify an occurrence's location.
+
+GBIF
+Endpoint family: https://api.gbif.org/v1/
+Bounded occurrence search with coordinates and optional taxon/date constraints.
+Records are not automatically marine-only. OBIS and GBIF can overlap; adding their
+counts does not produce an independent total.
+
+NASA EARTHDATA CMR
+Endpoint family: https://cmr.earthdata.nasa.gov/search/
+Dataset/collection discovery. The implemented results are metadata, not a generic
+pipeline that downloads and analyzes every satellite measurement product.
+
+NOAA NCEI ERDDAP CATALOG
+Endpoint family: https://www.ncei.noaa.gov/erddap/
+Dataset discovery. Catalog metadata and the separate numerical SST adapter have
+different purposes and must not be described as equivalent observations.
+
+IUCN RED LIST
+Endpoint family: https://api.iucnredlist.org/
+Optional authenticated assessment summaries by scientific name. Preserve category,
+year and assessment scope. No returned assessment does not mean Least Concern.
+
+OPENALEX
+Endpoint family: https://api.openalex.org/
+Optional literature discovery and available abstracts, not unrestricted full-text
+access. Missing abstracts and retracted works are excluded by the implemented path.
+Search results are not automatically added to the permanent paper library.
+
+LOCAL SCIENTIFIC PAPERS
+Permitted PDF/TXT/Markdown imports provide the curated full-text knowledge library.
+Local PDF extraction is distinct from reading all tables, figures or scanned pages.
+
+NOT CONNECTED AS GENERAL LIVE FEEDS
+INCOIS, FishBase, repository-specific eDNA services and Protected Planet/WDPA need
+specific product/access contracts. Local protected-area GeoJSON support exists;
+that does not constitute a live WDPA integration. CMFRI-style landings would need
+an actual permitted data import or a defined source integration.
+
+
+8. GEOGRAPHIC SELECTION AND DATA QUALITY
+========================================
+
+There are four ways to select an area:
+  1. Arabian Sea, Bay of Bengal or Indian Ocean preset.
+  2. Manual west/south/east/north coordinates.
+  3. Draw Area: click/touch, drag a rectangle, release.
+  4. Use visible map area.
+
+Coordinates use west,south,east,north ordering in bounding-box requests. These
+preset boxes are approximate query regions, not official territorial/EEZ boundaries.
+Dateline-crossing queries need separate boxes. Drawing temporarily prevents map
+panning; normal navigation resumes when drawing ends.
+
+Clear Selection removes loaded markers, rectangles and popups, clears the loaded
+results and cancels pending requests. The base map remains. This does not delete
+research papers, source records or database contents.
+
+OBIS location filtering:
+  - Original coordinates are retained; Atlas does not move points onto the ocean.
+  - Source quality flags and Atlas bounding-box checks determine default eligibility.
+  - ON_LAND, other location problems, absence records, nonmarine indications and
+    unchecked locations are handled conservatively.
+  - Flagged/unchecked locations are hidden by default and can be inspected through
+    the explicit review toggle as amber markers.
+  - Eligible markers are purple. Purple does not mean “verified fish.”
+  - If all loaded locations have ON_LAND flags, the card says “Locations flagged
+    on land” instead of claiming that 100 records are shown on the map.
+  - Raw retrieved counts and provider totals remain under Source and coverage.
+
+There is no independent high-resolution coastline verification in this filter.
+An upstream ON_LAND flag may merit review near coasts or estuaries. A collection of
+flagged points does not prove every square metre of the selected box is land.
+
+Paging and limits:
+OBIS uses 100 records per UI page; this is a request size, not a fixed ocean count.
+Load more retrieves additional pages. ARGO normally inspects three files per page;
+one file may contain several profiles or fail QC. File counts and usable profile
+counts are different. The map displays at most 2,000 eligible loaded points to
+bound rendering. None of these loaded samples is an exhaustive inventory.
+
+ARGO quality:
+The parser uses quality flags for position, time, pressure and measurements. It
+uses the appropriate raw or adjusted fields by data mode and does not substitute
+raw values when required adjusted data are missing. Pressure remains in dbar.
+Each profile returns at most 100 sampled qualifying levels; the count is a display
+sample, not necessarily every measurement in the original source file.
+
+
+9. CHARTS AND DEDUPLICATION
+===========================
+
+ARGO plots show measurement value vertically and pressure horizontally. Increasing
+pressure represents moving deeper; the horizontal direction is not elapsed time.
+Titles identify float, parameter and cycle. Supporting text shows observation time,
+location, units, numerical range and that each chart has its own scale.
+
+A visually large wiggle may represent a very small numerical range. Read the
+printed range/span before comparing charts. Pressure is not relabelled as metres.
+Other series, such as satellite SST or daily effort, use observation dates.
+
+The overview selects the widest loaded pressure range per float and measurement.
+Other distinct series remain expandable. This is a clutter-reduction rule, not a
+claim that the widest profile is the latest or scientifically best observation.
+
+Exact duplicate charts are removed using their identity/context, units and plotted
+measurements. Invalid numerical points are excluded and rows are ordered along the
+horizontal axis. Series with fewer than two valid points are omitted from plots.
+Raw downloaded evidence remains available; hiding a chart does not delete it.
+Different cycles or pressure ranges from one float are not automatically duplicates.
+
+
+10. ASK ATLAS CONVERSATION AND AGENTS
+=====================================
+
+AUTO
+Uses application routing to choose ordinary conversation or research/data handling.
+Simple general explanations can use conversation. Explicit sources, citations,
+literature requests, selected documents or enabled literature search direct Auto
+toward the evidence workflow. This routing is heuristic, not perfect language
+understanding. The user can choose a mode explicitly.
+
+CONVERSATION
+Handles ordinary questions and follow-ups with recent history. Replies are labelled
+“Conversation - not source-verified.” This path does not query selected papers or
+live data tools. It sends the message, recent history and optional scope to the
+configured model. The model is instructed to acknowledge ambiguity and avoid
+invented source IDs, observations, current facts or ecological conclusions.
+
+Example: “Are they dying?” after discussing sightings should not be rejected just
+because it lacks a region keyword. The assistant can interpret prior context or
+ask what “they” refers to. It should explain that sightings alone cannot establish
+mortality. These instructions are safeguards, not a guarantee of correctness.
+
+RESEARCH
+Uses the existing agent/retrieval pipeline and checked citations. Short follow-ups
+can be expanded using prior user context. If sufficient evidence is unavailable,
+the system should state that limit rather than invent a scientific conclusion.
+
+History and context:
+The frontend sends up to eight recent turns and scoped context. Conversation
+history is request-scoped and held in UI memory; there is no durable multi-user
+chat-history service. New conversation clears local conversation context. The
+selected scope is an input filter, not evidence of what is happening there.
+
+PLANNER
+Selects only needed domains. Explicit multi-domain requests can use deterministic
+rules; a configured model assists other planning within validated schemas and
+deadlines. Rule fallback recognizes a limited vocabulary, named regions and
+explicit coordinates/dates. The planner cannot invent geographic coordinates.
+
+OCEAN AGENT
+Retrieves appropriate ocean data: core ARGO temperature/salinity, explicit SST,
+and supported Copernicus variables. Distinguishes measurements, model output and
+unsupported periods. Optional-source failures remain separate.
+
+FISHERIES AGENT
+Uses GFW for apparent fishing effort and local imported records for landings.
+These remain different evidence types with separate interpretation limits.
+
+BIODIVERSITY AGENT
+Uses OBIS/GBIF occurrences, WoRMS taxonomy and supported IUCN assessment queries.
+Location-quality eligibility affects geographic visualizations.
+
+RESEARCH AGENT
+Retrieves selected scientific passages, optionally OpenAlex abstracts, and labelled
+NASA/NOAA discovery metadata when specifically requested.
+
+These agents are specialized application workflows. Atlas does not train four
+independent LLMs. LangGraph coordinates bounded calls; the model does not execute
+arbitrary SQL, Python, Cypher or unrestricted HTTP requests.
+
+Current language-model path:
+OpenRouter with configured model identifier nvidia/nemotron-3-ultra-550b-a55b:free.
+Gemini and local Ollama provider paths also exist but require their own setup.
+Model output is requested as structured JSON and validated locally. Free-service
+availability, limits and longevity are outside Atlas's control. No paid fallback
+is automatically selected. A configured key is not proof of live connectivity.
+
+
+11. LITERATURE, EMBEDDINGS, OKF AND RAG
+======================================
+
+RAG means Retrieval-Augmented Generation: retrieve relevant source material and
+use it to produce a grounded answer. It does not mean that the LLM has been trained
+on the uploaded papers. Updating the library changes retrieval, not model weights.
+
+The supplied PDFs are research material for this library. Extracted pages and
+metadata are stored locally; PDFs may remain outside the repository. Paper parts
+can appear as separate library entries, so document-entry count is not necessarily
+the number of distinct original PDFs.
+
+Ingestion:
+  - Validate file/type/size and metadata.
+  - Extract text and retain original PDF page context.
+  - Split into passages (the documented chunking uses 220 words with 40 overlap).
+  - Store document identity, source, license and passage metadata.
+  - Generate embeddings when the selected path requests them.
+
+PDF limits include imperfect text extraction. Scanned pages need external OCR;
+the importer does not visually interpret scientific figures and tables.
+
+EMBEDDINGS
+An embedding represents text as a numerical vector so semantically similar text
+can be compared. The configured local model is BAAI/bge-base-en-v1.5 with 768
+dimensions through FastEmbed. Its weights are cached in backend/.embedding-cache.
+Local embedding/reranking does not itself send paper text to a cloud API.
+
+OKF
+The repository implements Open Knowledge Format-style structured Markdown/YAML
+concept bundles, labelled OKF 0.2. OKF is a knowledge representation/export format,
+not an LLM or a substitute for the entire retrieve-and-ground process.
+
+Current KNOWLEDGE_RETRIEVAL=okf uses structured passage concepts and local BM25
+candidate ranking. SQL library records remain authoritative. Bundles can be
+exported, but their extracted concepts are not human-verified scientific findings.
+
+SEMANTIC RERANKING
+Initial discovery is followed by local semantic ranking of up to 32 candidates.
+Question-to-passage similarity, paper-title topic relevance and definition intent
+affect selection. A passage defining the requested concept receives preference for
+definition questions. Low-relevance and redundant passages are discarded.
+
+At most four selected passages reach synthesis, with at most two per source.
+Source identity includes DOI/document/link information. Duplicate filtering and
+thresholds are heuristics; retrieval scores are not probabilities of scientific truth.
+If the semantic model is unavailable, the pipeline does not send an unfiltered
+keyword-result list as though it were a supported answer.
+
+The alternative KNOWLEDGE_RETRIEVAL=hybrid combines vector and lexical retrieval
+using reciprocal-rank fusion. Existing vectors are preserved when using OKF.
+Changing embedding models/providers can require reindexing; changing only the
+chat model does not inherently require rebuilding the library vectors.
+
+Why this matters:
+A heatwave definition query should favor relevant definition/impact passages,
+not an eDNA paper that happens to repeat generic marine vocabulary. The solution
+is general semantic selection, not a hardcoded answer to one question.
+
+Library uploads are shared-library operations. They do not create isolated private
+collections for each browser user. Only process and share material with suitable
+rights. External answer generation may transmit selected passages to the configured
+LLM even when embeddings were generated locally.
+
+
+12. CITATIONS AND ANSWER VALIDATION
+===================================
+
+In the evidence workflow, passages/observations receive identifiers such as E1.
+Generated claims must reference known evidence IDs. The displayed answer attaches
+inline citations such as [E1], and the source panel preserves title, DOI/link,
+page, authors/year where available, record context and retrieval metadata.
+
+Checks include:
+  - Valid response schema and known citation IDs.
+  - Numeric support against cited text.
+  - Evidence-type consistency and unsupported inference checks.
+  - Local support for exact complete source sentences.
+  - Separate model review of paraphrases, requiring verifiable source excerpts.
+  - SUPPORTED, UNSUPPORTED or UNCERTAIN outcomes.
+  - A bounded repair attempt before unsupported/uncertain claims are withheld.
+
+Readable verified provider summaries can remain available when synthesis fails.
+Raw literature passages should not be disguised as a successful generated answer.
+No-data, insufficient support and provider failure need distinct explanations.
+
+This is not a mathematical proof of correctness. A reviewer LLM can make mistakes,
+retrieval can miss key sources, and numerical checks do not validate a study's
+methodology. Scientific interpretation still requires expert review.
+
+Development diagnostics expose query, candidate passages, scores, selected and
+discarded evidence, final sources, answer and validation attempts. They can contain
+paper text and should not be exposed casually on public deployments.
+
+Conversation mode deliberately has no retrieved-source validation. Its label
+must remain distinct from a cited, checked research answer.
+
+
+13. KNOWLEDGE GRAPH
+====================
+
+The graph represents provenance and explicit relationships among evidence,
+documents, sources, taxa, locations, measurements and periods. It can be built from
+the loaded dashboard snapshot or the latest relevant chat response.
+
+Users can pan, zoom, fit the graph, select nodes, inspect details and expand a
+bounded set of nodes. Taxon nodes can trigger an exact WoRMS lookup. Historical
+OBIS observations should use their actual event dates, not inherit recent ocean
+query dates as if they were simultaneous measurements.
+
+The default graph works without Neo4j. It is built from request/UI data. Optional
+Neo4j configuration enables persistence and related-document lookup using fixed,
+parameterized queries. Neo4j is not configured in the current local snapshot.
+
+A graph edge means a recorded relationship or provenance link. It does not prove
+that two phenomena are causally related or that co-occurring entities interacted.
+
+
+14. ANALYTICS AND SCIENTIFIC BOUNDARIES
+=======================================
+
+The implemented cross-domain analysis compares loaded ARGO temperature samples
+with GFW apparent fishing effort. It uses QC-approved shallow measurements in the
+0-10 dbar range, date aggregation and exact UTC-day overlap. It checks supplied
+query bounds and requires enough overlap before calculating Pearson correlation.
+
+At least three overlapping dates are needed; constant series do not yield a useful
+coefficient. There is no interpolation to manufacture overlap. The result is
+descriptive and based on the loaded sample, not a fresh independent verification
+of every client-supplied input against the original provider.
+
+Spatial sampling differs: a float measures a location/profile while GFW reports
+area activity. Confounding, temporal autocorrelation, fleet behavior and sampling
+bias remain. A coefficient from a few dates does not establish climate impact,
+population decline, mortality, causation or a prediction.
+
+The generic comparison endpoint also accepts bounded supplied date pairs. It does
+not automatically solve scientific alignment across arbitrary sources.
+
+Always distinguish:
+  - Occurrence count versus population abundance.
+  - Fishing effort versus catch or landings.
+  - Point/profile measurement versus regional average.
+  - Model output versus observed measurement.
+  - Historical inventory versus contemporary conditions.
+  - Literature interpretation versus newly computed evidence.
+  - Correlation versus causation.
+
+
+15. eDNA, OTOLITHS AND LOCAL IMPORTS
+====================================
+
+The broader brief includes molecular biodiversity and morphology. The MVP provides
+source-attributed eDNA and otolith sample metadata storage/import workflows.
+DNA checks validate allowed sequence syntax; they do not identify an organism.
+Morphology ratios use submitted measurements; they are not an image classifier.
+
+Not implemented:
+  - A universal live eDNA feed.
+  - Sequence alignment/classification against a curated reference database.
+  - Species detection or abundance estimates from sequence reads.
+  - Automatic otolith-image classification or validated age estimation.
+
+Local CSV import paths exist for ARGO-like observation records and regional
+fisheries landings. Legacy imported tables do not carry all the provenance of the
+live-provider evidence model, so imported data are labelled appropriately rather
+than assumed independently verified. Empty tables are not filled with demo science.
+
+
+16. STORAGE AND CURRENT CONFIGURATION
+======================================
+
+Verified local snapshot on 30 September 2026:
+  - /ready: ready; schema ready.
+  - Database mode: demo; database type: SQLite.
+  - Canonical application database: backend/atlas-local.db.
+  - Research document entries: 11.
+  - Research chunks: 674.
+  - Exportable OKF concepts: 577; human_verified=false.
+  - Local ARGO observation rows: 0.
+  - Local fisheries landing rows: 0.
+  - Local science/specimen rows: 0.
+  - LLM provider: OpenRouter; configured=true.
+  - Chat model: nvidia/nemotron-3-ultra-550b-a55b:free.
+  - Retrieval: OKF; local BAAI/bge-base-en-v1.5 embeddings configured.
+  - Neo4j graph persistence: not configured.
+  - Optional OpenAlex literature search: not configured.
+
+Different chunk/concept counts are expected because concept construction filters
+unsuitable fragments. These are local counts, not a global scientific corpus.
+
+Empty local observation tables do not mean the map is synthetic or has no data:
+live adapters retrieve external observations on demand without copying everything
+into those legacy tables.
+
+Other storage:
+  - backend/argo-index.db: ARGO discovery metadata, not the full profile archive.
+  - backend/.embedding-cache: downloaded local model weights.
+  - Process-local bounded caches/rate limits: not a shared Redis infrastructure.
+  - UI state: loaded snapshot and conversation context for the current session.
+
+DATABASE_MODE=demo selects atlas-local.db even if an older DATABASE_URL exists.
+DATABASE_MODE=configured explicitly selects DATABASE_URL. Switching databases does
+not automatically migrate the library. PostgreSQL/pgvector is an optional path,
+not the database presently demonstrated.
+
+
+17. APIs AND CODEBASE MAP
+==========================
+
+Main API groups:
+  GET  /health                         Process health
+  GET  /ready                          Database/schema readiness and counts
+  GET  /api/ai/status                   Nonsecret AI configuration
+  POST /api/chat                        Conversation or evidence workflow
+  GET  /api/sources                     Source capabilities/configuration
+  GET  /api/datasets                    Registered dataset catalog
+  GET  /api/oceanography/argo/gdac       Live indexed core profiles
+  GET  /api/biodiversity/obis            OBIS occurrence pages
+  GET  /api/biodiversity/gbif            GBIF occurrences
+  GET  /api/fisheries/effort             GFW apparent fishing activity
+  GET  /api/oceanography/erddap/sst      Numerical SST point series
+  GET  /api/oceanography/copernicus     Supported model point data
+  GET  /api/taxonomy/resolve            WoRMS name lookup
+  GET  /api/conservation/iucn           IUCN summaries
+  GET  /api/discovery/nasa              CMR metadata discovery
+  GET  /api/discovery/noaa              ERDDAP catalog discovery
+  GET  /api/research/documents          Shared library listing
+  POST /api/research/documents/upload   Protected document import
+  GET  /api/research/search             Retrieval inspection
+  GET  /api/research/okf                Concept counts/configuration
+  GET  /api/research/okf/bundle         Structured knowledge export
+  GET  /api/research/openalex           Optional abstract discovery
+  GET/POST /api/science/records/{kind}  Supported specimen metadata
+  POST /api/science/compare             Descriptive supplied-pair comparison
+
+Additional routes handle local observation CRUD, landings, reindex/delete,
+protected-area files, cache administration and loaded cross-domain analysis.
+Use http://127.0.0.1:8000/docs for the exact current request schemas and route list.
+
+Frontend files:
+  frontend/src/App.tsx                 Navigation and shared page state
+  frontend/src/atlas.css               Atlas visual design
+  frontend/src/services/atlas.ts       API types and requests
+  components/Views/OceanWorkspace.tsx  Map query, data cards, charts and records
+  components/Views/MapAreaSelection.tsx Rectangle interaction
+  components/Views/FloatChatView.tsx   Chat UI, history and mode selection
+  components/Views/ChatEvidence.tsx    Citations, status and diagnostics
+  components/Views/KnowledgeGraph.tsx Graph rendering and snapshot conversion
+  components/Views/ResearchLibrary.tsx Library operations
+  components/Views/DomainViews.tsx    Domain pages and administration
+  components/Views/SourcesView.tsx    Source catalog
+
+Backend files:
+  backend/app/main.py                  API application and startup
+  backend/app/config.py                Settings and safe defaults
+  backend/app/database.py              Database selection and schema support
+  backend/app/models.py                Core relational models
+  backend/app/api/                     HTTP route handlers
+  backend/app/services/                Provider adapters and analysis
+  backend/app/ai/schemas.py            Validated AI contracts
+  backend/app/ai/conversation.py       General chat routing and replies
+  backend/app/ai/planner.py            Domain/scope planning
+  backend/app/ai/engine.py             LangGraph and evidence composition
+  backend/app/ai/agents.py             Specialized domain retrieval
+  backend/app/ai/provider.py           LLM/embedding provider boundary
+  backend/app/ai/rag.py                Library retrieval support
+  backend/app/ai/okf.py                Structured concepts and bundles
+  backend/app/ai/rerank.py             Semantic passage selection
+  backend/app/ai/support.py            Per-claim support checks
+  backend/app/ai/knowledge.py          Evidence graph support
+  backend/app/ai/local_embeddings.py   Local embedding execution
+  backend/scripts/                    Import and diagnostic utilities
+  backend/tests/                      Backend regression suite
+
+Other references: README.md, DEMO_REPORT.md, backend/README.md, AI_ENGINE.md,
+SOURCES.md, ARGO_GDAC.md and OKF.md. Some test counts and descriptions in older
+documents predate recent work; use this snapshot and the code for the latest state.
+
+
+18. RUNNING AND MAINTAINING THE PROJECT
+=======================================
+
+Existing setup: open two PowerShell terminals in the project root.
+
+Terminal 1:
+  .\backend\start-local.ps1
+
+Terminal 2:
+  cd frontend
+  npm run dev
+
+Open http://localhost:3000
+Backend: http://127.0.0.1:8000
+Interactive API docs: http://127.0.0.1:8000/docs
+Readiness: http://127.0.0.1:8000/ready
+
+First-time dependency setup from the project root:
+  python -m venv backend/.venv
+  backend/.venv/Scripts/python -m pip install -r backend/requirements-dev.txt
+  cd frontend
+  npm install
+
+Backend configuration belongs in backend/.env. Configure only required providers;
+do not place backend secrets into frontend variables. Restart the backend after
+changing its settings. The launcher reuses a healthy Atlas server on port 8000;
+it does not reload changed Python code merely because the command is run again.
+
+Important configuration names:
+  DATABASE_MODE, DATABASE_URL, CORS_ORIGINS, ADMIN_API_KEY
+  LLM_PROVIDER, LLM_MODEL, OPENROUTER_API_KEY
+  EMBEDDING_PROVIDER, EMBEDDING_MODEL, KNOWLEDGE_RETRIEVAL
+  DEVELOPMENT_MODE, RERANK_MIN_SCORE, RERANK_SCORE_MARGIN
+  GFW_API_KEY, IUCN_API_KEY
+  COPERNICUSMARINE_SERVICE_USERNAME, COPERNICUSMARINE_SERVICE_PASSWORD
+  OPENALEX_ENABLED, OPENALEX_API_KEY
+  Optional NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE
+
+Maintain the ARGO index, from backend:
+  .\.venv\Scripts\python.exe -m app.services.sync_argo_index
+
+This refreshes discovery metadata; it does not download every profile. No daily
+scheduler is installed. Stale indexes are disclosed; a failed refresh preserves
+the previous index. Refresh before a demonstration requiring recent observations.
+
+Import permitted papers, from backend:
+  .\.venv\Scripts\python.exe scripts/index_papers.py "C:\path\to\papers"
+
+Keep original PDFs and attribution. Back up atlas-local.db before schema changes
+or large imports. Database initialization creates/validates tables; it is not a
+complete migration/versioning system.
+
+Checks, from backend:
+  .\.venv\Scripts\python.exe -m pytest -q
+
+Checks, from frontend:
+  npm test
+  npm run lint
+  npm run build
+
+Selected browser checks with servers running:
+  node check-area-selection.mjs
+  node check-pagination.mjs
+  node check-obis-quality.mjs
+  node check-profile-charts.mjs
+
+Troubleshooting:
+  Port 8000 busy: identify the process; reuse/restart Atlas rather than launching
+  another copy. Do not terminate an unrelated process indiscriminately.
+  No OBIS matches: inspect dates, species, geography and historical-inventory mode.
+  Empty map but raw records exist: inspect location flags and layer visibility.
+  No ARGO profiles: inspect index freshness, date range and QC exclusions.
+  Model configured but no answer: configuration is not connectivity; inspect the
+  returned unavailable/timeout status. Free endpoints can be intermittent.
+  Semantic model unavailable: check cached local weights/model configuration.
+  Copernicus unavailable: check required credentials and supported product/range.
+
+
+19. SECURITY, PRIVACY AND DEPLOYMENT
+====================================
+
+Keys remain server-side. Protected imports/writes require X-API-Key and an admin
+key configured on the backend. CORS is limited to configured origins. Inputs,
+geographic ranges, request sizes and output schemas are validated. Source URLs
+displayed by the frontend are checked before links are rendered.
+
+Application-owned connector endpoints and fixed graph queries reduce the scope
+of actions available to the model. Documents/history are treated as untrusted
+content in AI prompts. These are safeguards, not a completed security audit.
+
+The current product lacks production multi-user authentication, tenant isolation,
+durable user chat accounts, a distributed cache/rate limiter and a deployment/SLA
+setup. Local host binding and an admin key are not substitutes for those systems.
+
+Local embedding does not mean the entire AI workflow is offline. Cloud conversation
+sends messages/history/scope; research synthesis/review can send selected passages.
+Respect document rights, provider terms and sensitive-data requirements. An earlier
+full private-paper-to-external-model live test remained unverified pending permission;
+the later successful public conversation test does not validate that paper workflow.
+
+Backups should preserve the application database, original research documents,
+configuration securely, and any permitted imported files. Never publish .env or
+keys. If a credential was previously committed, removing the file from current Git
+tracking does not erase it from history; rotate it before sharing/deploying.
+
+
+20. VERIFICATION AND KNOWN LIMITATIONS
+======================================
+
+Most recent checks before this guide:
+  - Backend: 180 tests passed, one dependency deprecation warning.
+  - Frontend: 17 tests passed.
+  - TypeScript checks passed after the chat changes.
+  - Browser fixture checks verified OBIS quality display, clearing overlays,
+    pagination and profile chart deduplication/expansion.
+  - A live public conversation question, “Why is the ocean salty?”, received a
+    successful reply from the configured model.
+  - The restarted API returned a successful conversation response to “Hello”.
+  - This guide's read-only checks confirmed readiness and library/configuration
+    counts shown in section 16.
+
+Earlier development evidence includes successful live ARGO, OBIS, GFW and WoRMS
+responses, source-isolation checks, local reranking and browser navigation tests.
+These historical checks are not continuous uptime monitoring. Fixture tests verify
+our behavior against controlled data; they do not establish that every external
+service is currently operational.
+
+Outstanding limitations:
+  - Intermittent free LLM latency/availability and fallible generated explanations.
+  - Unreliable numerical SST service in earlier live checks.
+  - Optional providers require configuration and separate live validation.
+  - Bounded sampling, pagination and rendering rather than exhaustive ingestion.
+  - No independent coastline mask for all occurrence locations.
+  - Manual ARGO index refresh; no production ingestion scheduler.
+  - Small curated research corpus; imperfect PDF extraction and retrieval coverage.
+  - No complete ecological causality, forecasting or abundance model.
+  - No complete molecular identification or otolith classifier.
+  - No production user accounts, tenant isolation or formal deployment hardening.
+  - General chat is not citation-verified; choose Research for retrieved evidence.
+
+Tests demonstrate specified behaviors. They do not certify scientific accuracy,
+regulatory suitability, security or operational reliability of the whole product.
+
+
+21. DEMO, PRESENTATION AND COMMON QUESTIONS
+===========================================
+
+Suggested concise explanation:
+“Project Atlas brings ocean observations, fishing activity, biodiversity records
+and scientific literature into one workspace. A user selects an area or asks a
+question. Atlas retrieves relevant evidence through specialized adapters and
+agents, then presents maps, charts and traceable answers with source limitations.”
+
+Suggested demonstration:
+  1. Open Home and explain the fragmented-data problem.
+  2. Select Arabian Sea or draw a box; show the coordinates changing without a
+     network load. Click Load data explicitly.
+  3. Inspect ARGO and OBIS cards, records and provenance. Explain historical dates,
+     pagination and flagged locations rather than hiding missing coverage.
+  4. Read one ARGO chart correctly: temperature versus pressure, cycle and time.
+     Expand a distinct additional profile and show why it is not a duplicate.
+  5. Open the knowledge graph and inspect a source/taxon node.
+  6. Ask a general question in Conversation, then request supporting literature in
+     Research. Point out the different answer labels and citations.
+  7. If loaded samples permit analysis, show it with sample size and limits. If not,
+     explain the honest insufficient-data result.
+  8. Clear Selection to return to an empty base map.
+
+Questions to try:
+  Conversation: “How does warmer water affect fish?”
+  Follow-up: “Does that mean they are dying?”
+  Research: “What do the uploaded papers say about marine heatwaves? Cite sources.”
+  Data: “Which species have been observed in the Arabian Sea?”
+  Data: “Show ARGO temperature in the Bay of Bengal.”
+  Mixed: “What oceanographic, biodiversity and fisheries information is available
+  for the Arabian Sea, and what does the literature say about marine heatwaves?”
+
+What is distinctive?
+The integration of spatial selection, domain-specific retrieval, literature,
+provenance and conservative presentation. This is an implementation contribution;
+we have not established that no other platform has similar capabilities.
+
+Is the data real?
+Active source adapters return provider records; failures are not replaced with
+fabricated observations. Some UI descriptions, region presets and styling are
+necessarily predefined. General LLM explanations are generated text, not measured
+data. Imported local records require their own provenance assessment.
+
+Did we replace RAG with Google's model?
+No. OKF is a structured knowledge format/path. Atlas still retrieves, reranks and
+grounds research answers. The configured answer model is accessed through OpenRouter.
+
+Did we build a predictive marine AI?
+Not in this MVP. We built retrieval, exploration, conversation and bounded
+descriptive analysis. Prediction requires additional models and validation.
+
+Why not show every record immediately?
+External response limits, latency and browser performance require bounded requests.
+Atlas exposes paging, loaded counts, source totals where supplied and display caps.
+
+Can fish occurrences prove population decline?
+No. Survey effort, detectability, sampling design and comparable time series matter.
+The platform should help inspect evidence, not manufacture a population estimate.
+
+Will the free model always work?
+Atlas cannot promise that. It uses the configured provider/model and reports
+unavailability. A successful request today is not a lifetime service guarantee.
+
+
+22. FUTURE WORK AND GLOSSARY
+=============================
+
+The user has chosen to stop feature development at the MVP. The following is a
+record of possible next steps, not work being started now.
+
+Reliability:
+Stable inference hosting, connector monitoring, background jobs, shared caching,
+automated index refresh and predictable provider-error handling.
+
+Scientific quality:
+Expert-labelled retrieval/answer evaluation, better spatial alignment, independent
+coastline review, sampling-bias analysis, larger permitted literature coverage and
+validated statistical methods. Any forecast requires separate data and validation.
+
+Domain depth:
+Specific permitted INCOIS/FishBase/protected-area feeds, BGC-Argo, molecular reference
+data and validated sequence/otolith analysis if the required datasets are available.
+
+Product/production:
+User studies, accessibility testing, authentication, library isolation, durable
+saved workspaces, database migrations, observability, deployment and backup restore
+testing. These are future requirements, not claims about the current MVP.
+
+GLOSSARY
+API: a programmatic interface used by applications to request or submit data.
+Adapter/connector: code translating Atlas requests to a provider's format.
+Agent: a bounded domain workflow selecting/retrieving relevant information.
+LLM: a language model generating text; not automatically a verified source.
+RAG: retrieval of source material before grounded answer generation.
+Embedding: a numerical text representation used for semantic comparison.
+Reranking: selecting the most relevant candidates after initial retrieval.
+BM25: lexical retrieval scoring based on terms and document statistics.
+OKF: structured knowledge representation/export used by this implementation.
+Provenance: where a record came from and its identifying/time/context metadata.
+DOI: persistent identifier for a publication or dataset.
+QC: quality-control flags/checks attached to measurements or records.
+GDAC: Global Data Assembly Centre distributing ARGO data.
+SST: sea surface temperature; not every ARGO temperature is SST.
+dbar: decibar, a pressure unit used in ocean profiles.
+AIS: vessel broadcast information used in apparent fishing-activity products.
+Occurrence: a reported organism/taxon observation, not a population count.
+Taxonomy: classification and accepted naming of organisms.
+AphiaID: a WoRMS taxonomic identifier.
+eDNA: environmental DNA; sample presence alone is not an identified species result.
+Otolith: a fish ear structure studied for morphology and other biological information.
+Bounding box: rectangle specified as west, south, east and north coordinates.
+Knowledge graph: typed entities connected by recorded relationships.
+Pearson r: a linear association coefficient, not proof of causation.
+MVP: minimum viable product demonstrating a useful workflow with stated limits.
+
+END OF GUIDE

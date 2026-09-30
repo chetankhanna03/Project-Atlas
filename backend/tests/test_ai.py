@@ -27,7 +27,8 @@ def test_clarification_and_no_fake_answer(client):
     response = client.post('/api/chat', json={'message': 'Hello'})
     assert response.status_code == 200
     data = response.json()
-    assert data['status'] == 'needs_input'
+    assert data['status'] == 'ok'
+    assert data['mode'] == 'conversation'
     assert data['citations'] == []
     assert data['agents'] == []
 
@@ -72,7 +73,7 @@ def test_parallel_agents_partial_failure_and_real_chart(client, monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data['status'] == 'partial'
-    assert {r['domain'] for r in data['agents']} == {'ocean','biodiversity','research'}
+    assert {r['domain'] for r in data['agents']} == {'ocean','biodiversity'}
     assert len(data['citations']) == 1
     assert data['visualizations'][0]['points'][0]['value'] == 27
     assert data['visualizations'][0]['evidence_id'] == 'E1'

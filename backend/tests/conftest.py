@@ -1,5 +1,6 @@
 import os
 os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+os.environ['DATABASE_MODE'] = 'configured'
 os.environ['ADMIN_API_KEY'] = 'test-private-key'
 
 import pytest

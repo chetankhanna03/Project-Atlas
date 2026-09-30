@@ -41,7 +41,7 @@ async def request_json(source, url, params=None, refresh=False):
         raise HTTPException(504, {'source': source, 'code': 'timeout', 'message': 'Source request timed out.'})
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
-        code = 'rate_limited' if status == 429 else 'source_unavailable'
+        code = 'authentication_failure' if status in (401, 403) else ('rate_limited' if status == 429 else 'source_unavailable')
         raise HTTPException(503 if status in (401, 403, 429) or status >= 500 else 502,
                             {'source': source, 'code': code, 'upstream_status': status})
     except httpx.RequestError:
@@ -94,8 +94,36 @@ async def get_sst(lat, lon, days=7):
             'query': {'latitude': lat, 'longitude': lon, 'latest_available_days': days},
             'limitations': ['Nearest grid cell; latest available observations may lag today. Recent values may be revised.']}
 
-async def get_obis(bounds, limit=100, species=None, after=None):
+def obis_quality(record, bounds):
+    raw = record.get('flags')
+    flags = [str(flag).upper() for flag in raw] if isinstance(raw, list) else [flag.strip().upper() for flag in raw.split(',') if flag.strip()] if isinstance(raw, str) else []
+    reasons = []
+    if 'ON_LAND' in flags:
+        reasons.append('OBIS flags this coordinate as on land; coastal and estuarine records need review.')
+    if 'NOT_MARINE' in flags or record.get('marine') is False:
+        reasons.append('Source identifies this taxon as non-marine.')
+    if record.get('absence') is True or str(record.get('occurrenceStatus', '')).lower() == 'absent':
+        reasons.append('Absence record, not an observed occurrence.')
+    w, s, e, n = bounds
+    if not (s <= float(record['decimalLatitude']) <= n and w <= float(record['decimalLongitude']) <= e):
+        reasons.append('Coordinate lies outside the requested bounding box.')
+    if any(flag in flags for flag in ('NO_COORD', 'ZERO_COORD', 'INVALID_COORD', 'MARINE_UNSURE')):
+        reasons.append('OBIS reports uncertain coordinates or marine classification.')
+    checked = isinstance(raw, (list, str))
+    return {'flags': flags, 'status': 'review' if reasons else 'no_reported_location_issue' if checked else 'not_checked',
+            'map_eligible': checked and not reasons,
+            'reasons': reasons or ([] if checked else ['Source quality flags were not supplied; location has not been checked.']),
+            'method': 'OBIS upstream quality flags and Atlas bounding-box validation; no independent coastline verification.'}
+
+
+async def get_obis(bounds, limit=100, species=None, after=None, start=None, end=None):
+    if start and end and start > end:
+        raise HTTPException(422, 'OBIS start date must precede end date.')
     params = {'geometry': polygon_wkt(bounds), 'size': limit}
+    if start:
+        params['startdate'] = start.isoformat()
+    if end:
+        params['enddate'] = end.isoformat()
     params['total'] = 'true'
     if after is not None:
         params['after'] = after
@@ -119,12 +147,19 @@ async def get_obis(bounds, limit=100, species=None, after=None):
                         'latitude': latitude, 'longitude': longitude,
                         'event_date': record.get('eventDate'), 'depth': record.get('depth'),
                         'aphia_id': record.get('aphiaID'), 'dataset_id': record.get('dataset_id'),
-                        'dataset': 'OBIS', 'license': record.get('license')})
+                        'dataset': 'OBIS', 'license': record.get('license'),
+                        'marine': record.get('marine'), 'terrestrial': record.get('terrestrial'),
+                        'taxon_rank': record.get('taxonRank'), 'occurrence_status': record.get('occurrenceStatus'),
+                        'coordinate_uncertainty_m': record.get('coordinateUncertaintyInMeters'),
+                        'quality': obis_quality(record, bounds)})
     return {'status': 'ok' if results else 'no_data', 'count': len(results), 'results': results,
             'provenance': provenance, 'limit': limit,
             'total_matching': data.get('total') if isinstance(data.get('total'), int) and data['total'] >= 0 else None,
             'next_cursor': str(results[-1]['record_id']) if len(results) == limit and results[-1]['record_id'] is not None and str(results[-1]['record_id']) != after else None,
-            'limitations': ['Paginated occurrence records, not an abundance estimate or complete species inventory. Date filters are not applied to this source.']}
+            'query': {'bbox': list(bounds), 'start': start.isoformat() if start else None, 'end': end.isoformat() if end else None, 'date_filter': 'upstream' if start or end else 'none'},
+            'limitations': ['Paginated occurrence records, not an abundance estimate or complete species inventory.',
+                'OBIS includes many taxa, not only fish. Flagged or unchecked locations are hidden on the map by default; original records remain inspectable. Provider QC is not a guarantee of correct coordinates.',
+                'OBIS event-date filters applied upstream; publication and observation dates differ.' if start or end else 'No event-date filter requested; records may be historical.']}
 
 async def get_taxonomy(name, refresh=False):
     data, provenance = await request_json('WoRMS', WORMS + '/' + quote(name, safe=''),

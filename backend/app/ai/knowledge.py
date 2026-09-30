@@ -1,6 +1,7 @@
 """Evidence relationships only. No inferred ecological or causal graph edges."""
 import asyncio
 import hashlib
+import json
 from neo4j import AsyncGraphDatabase, Query
 from neo4j.exceptions import Neo4jError, DriverError
 from app.config import settings
@@ -18,21 +19,33 @@ def build(evidence, scope):
     nodes, edges = {}, []
     def node(kind, label, key=None, **properties):
         node_id = identity(kind, key or label)
-        nodes[node_id] = {'id': node_id, 'kind': kind, 'label': label[:300], **properties}
+        nodes.setdefault(node_id, {'id': node_id, 'kind': kind, 'label': label[:300]}).update(properties)
         return node_id
     def edge(source, target, kind):
         edges.append({'source': source, 'target': target, 'kind': kind})
     for item in evidence:
         source = node('source', item.source)
-        observation = node('evidence', item.title, item.source + item.text, citation_id=item.id)
+        observation = node('evidence', item.title, item.source + item.text, citation_id=item.id, data=item.model_dump(mode='json'))
         edge(source, observation, 'PROVIDES')
         if item.document_id:
-            document = node('document', item.title, item.document_id, document_id=item.document_id)
+            document = node('document', item.title, item.document_id, document_id=item.document_id,
+                            data={'doi': item.doi, 'url': item.url, 'authors': item.authors, 'year': item.year})
             edge(document, observation, 'HAS_PASSAGE')
         for kind, value in [('species', scope.species), ('location', scope.region)]:
             if value and value.lower() in item.text.lower():
                 edge(observation, node(kind, value), 'MENTIONS')
         metadata = item.metadata
+        for record in metadata.get('records', [])[:50]:
+            if isinstance(record, dict) and record.get('scientific_name'):
+                species = node('species', record['scientific_name'])
+                nodes[species].setdefault('data', {}).setdefault('observations', []).append({**record, 'source': item.source, 'retrieved_at': item.retrieved_at})
+                edge(observation, species, 'MENTIONS')
+        if metadata.get('bbox'):
+            edge(observation, node('location', scope.region or 'Selected area', json.dumps(metadata['bbox']), data={'bbox': metadata['bbox'], 'region': scope.region}), 'OBSERVED_AT')
+        if metadata.get('variable'):
+            edge(observation, node('parameter', metadata['variable'], data={'unit': metadata.get('unit'), 'pressure_unit': 'dbar'}), 'MEASURES')
+        if metadata.get('time'):
+            edge(observation, node('time', str(metadata['time'])), 'PERIOD_START')
         if metadata.get('parameter'):
             edge(observation, node('parameter', metadata['parameter']), 'MEASURES')
         if metadata.get('latitude') is not None and metadata.get('longitude') is not None:
@@ -40,6 +53,15 @@ def build(evidence, scope):
         for key in ('start', 'end'):
             if metadata.get(key):
                 edge(observation, node('time', str(metadata[key])), 'PERIOD_' + key.upper())
+    # Link known reported taxa to papers only when explicitly mentioned.
+    species_nodes = [entry for entry in nodes.values() if entry['kind'] == 'species']
+    for item in evidence:
+        if item.kind == 'literature':
+            for species in species_nodes:
+                if species['label'].lower() in item.text.lower():
+                    relation = {'source': identity('evidence', item.source + item.text), 'target': species['id'], 'kind': 'MENTIONS'}
+                    if relation not in edges:
+                        edges.append(relation)
     return {'nodes': list(nodes.values()), 'edges': edges, 'persistence': 'request_only',
             'limitations': ['Edges record source provenance and explicit mentions, not ecological causation.']}
 
@@ -53,7 +75,8 @@ async def persist(graph):
     if not configured() or not graph['nodes']:
         return graph
     async def write(tx):
-        result = await tx.run(Query('UNWIND $nodes AS row MERGE (n:AtlasEntity {id: row.id}) SET n += row', timeout=4), nodes=graph['nodes'])
+        serializable = [{key: json.dumps(value) if isinstance(value, dict) else value for key, value in node.items()} for node in graph['nodes']]
+        result = await tx.run(Query('UNWIND $nodes AS row MERGE (n:AtlasEntity {id: row.id}) SET n += row', timeout=4), nodes=serializable)
         await result.consume()
         result = await tx.run(Query('''UNWIND $edges AS row
             MATCH (a:AtlasEntity {id: row.source}), (b:AtlasEntity {id: row.target})

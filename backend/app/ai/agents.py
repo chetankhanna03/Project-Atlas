@@ -57,7 +57,73 @@ def local_ocean(scope):
                 for row in rows]
 
 
+def source_failure(source, exc):
+    detail = exc.detail if isinstance(exc, HTTPException) and isinstance(exc.detail, dict) else {}
+    status = getattr(exc, 'status_code', 504)
+    code = detail.get('code', 'timeout' if status == 504 else 'provider_unavailable')
+    if detail.get('upstream_status', status) in (401, 403):
+        code = 'authentication_failure'
+    labels = {'timeout': 'request timed out', 'authentication_failure': 'authentication failed',
+              'unsupported_parameter': 'requested parameter is unsupported'}
+    return {'source': source, 'status': 'unavailable', 'code': code,
+            'http_status': status, 'upstream_status': detail.get('upstream_status'),
+            'message': f"{source}: {labels.get(code, 'provider unavailable')}; this source was not included."}
+
+
 async def ocean(plan: Plan, request: ChatRequest):
+    """Bound each provider independently; optional failures never erase evidence."""
+    text = request.message.lower()
+    broad = bool(re.search(r'\boceanographic\b|\bocean (?:conditions|information|data)\b', text))
+    sources = []
+    if broad or re.search(r'\bargo\b', text) or plan.scope.parameter in ('temperature', 'salinity'):
+        sources.append('ARGO')
+    if broad or re.search(r'\bsst\b|sea surface temperature', text) or not sources:
+        sources.append('SST')
+    if 'copernicus' in text or plan.scope.parameter in ('currents', 'sea_level'):
+        sources = (sources if broad else []) + ['Copernicus']
+    selected = plan.scope.selected_datasets
+    if broad and selected:
+        sources = [label for key, label in [('argo','ARGO'), ('sst','SST'), ('copernicus','Copernicus')] if key in selected]
+        if not sources:
+            return AgentResult(domain='ocean', status='no_data', limitations=['No oceanographic dataset selected in dashboard context.'])
+    if plan.scope.parameter in ('oxygen', 'chlorophyll'):
+        return AgentResult(domain='ocean', status='unsupported', limitations=[f'No verified {plan.scope.parameter} connector is implemented; BGC-Argo is unavailable.'],
+            source_statuses=[{'source': 'BGC-Argo', 'status': 'unsupported', 'code': 'unsupported_parameter'}])
+
+    async def retrieve(source):
+        local = plan.model_copy(deep=True)
+        message = request.model_copy(deep=True)
+        message.message = source
+        if source != 'SST':
+            local.scope.start_date, local.scope.end_date = requested_dates(plan.scope, request.message)
+        if source == 'ARGO':
+            local.scope.parameter = 'salinity' if plan.scope.parameter == 'salinity' else 'temperature'
+        elif source == 'SST':
+            local.scope.parameter = 'sst'
+            if broad and (local.scope.start_date or local.scope.end_date):
+                return AgentResult(domain='ocean', status='unsupported', limitations=['SST: this adapter only supports the latest available window, not the requested date range.'],
+                    source_statuses=[{'source': source, 'status': 'unsupported', 'code': 'unsupported_date_range'}])
+        try:
+            result = await asyncio.wait_for(ocean_source(local, message), timeout=settings.http_timeout_seconds + 5 if source != 'Copernicus' else 48)
+            result.source_statuses = [{'source': source, 'status': result.status, 'code': result.status}]
+            if result.status != 'ok':
+                result.limitations = [f'{source}: {note}' for note in result.limitations]
+            return result
+        except (HTTPException, asyncio.TimeoutError) as exc:
+            error = source_failure(source, exc)
+            return AgentResult(domain='ocean', status='unavailable', source_statuses=[error], limitations=[error['message']])
+
+    results = await asyncio.gather(*(retrieve(source) for source in sources))
+    evidence = [item for result in results for item in result.evidence]
+    states = {result.status for result in results}
+    status = ('ok' if states == {'ok'} else 'partial') if evidence else next((s for s in ('unavailable', 'needs_input', 'unsupported', 'no_data') if s in states), 'no_data')
+    return AgentResult(domain='ocean', status=status, evidence=evidence,
+        limitations=[note for result in results for note in result.limitations],
+        source_statuses=[item for result in results for item in result.source_statuses],
+        visualizations=[chart for result in results for chart in result.visualizations])
+
+
+async def ocean_source(plan: Plan, request: ChatRequest):
     scope = plan.scope
     start,end=requested_dates(scope,request.message)
     limitations = []
@@ -93,15 +159,19 @@ async def ocean(plan: Plan, request: ChatRequest):
                                   'salinity' if scope.parameter == 'salinity' else 'temperature')
         evidence = []
         for i, profile in enumerate(data['profiles']):
-            # Preserve pressure context for every value in the model-visible sample.
-            sample = {key: value for key, value in profile.items() if key != 'levels'}
-            sample['levels'] = profile['levels'][:10]
+            description = (f"Atlas retrieved an ARGO {profile.get('parameter', scope.parameter)} profile from float {profile['float_id']}, cycle {profile['cycle']}, "
+                f"at {profile['latitude']} latitude and {profile['longitude']} longitude, observed {profile['time']}. "
+                f"The loaded profile contains {len(profile['levels'])} sampled QC-passing measurement levels; pressure is in dbar, not metres. "
+                'This is an in-situ vertical profile, not satellite SST or a regional mean.')
+            if profile['levels']:
+                shallow = min(profile['levels'], key=lambda row: row['pressure_dbar'])
+                description += f" The shallowest loaded measurement is {shallow['value']} {profile.get('unit', '')} at {shallow['pressure_dbar']} dbar."
             evidence.append(Evidence(id=f'O-ARGO-{i}', domain='ocean', title=f"Argo float {profile['float_id']} cycle {profile['cycle']}",
-                source=data['source'], text=json.dumps(sample),
+                source=data['source'], text=description,
                 url=profile['url'], retrieved_at=profile['retrieved_at'], source_last_updated=profile['source_last_updated'],
-                metadata={**profile, 'doi': data['doi']}))
+                metadata={**profile, 'doi': data['doi'], 'observation_summary': description}))
         warnings = data['limitations'] + [error['detail'] for error in data['errors']]
-        return AgentResult(domain='ocean', status='ok' if evidence else data['status'], evidence=evidence, limitations=warnings)
+        return AgentResult(domain='ocean', status=('partial' if data['errors'] else 'ok') if evidence else data['status'], evidence=evidence, limitations=warnings)
     if scope.start_date or scope.end_date:
         rows = await run_in_threadpool(local_ocean, scope)
         limitations.append('Local imported ARGO observations have unverified per-row provenance and varying depths. These are not regional SST averages.')
@@ -170,10 +240,13 @@ async def fisheries(plan, request):
         for row in data['results']:
             daily[row['date']]=daily.get(row['date'],0)+row['apparent_fishing_hours']
         if data['results']:
+            description = (f"Global Fishing Watch returned {data['total_apparent_fishing_hours']} apparent fishing hours across "
+                f"{len(data['results'])} date-and-flag rows for the requested bounding box. "
+                f"Returned observation dates span {min(daily)} to {max(daily)}. "
+                'This is AIS-derived apparent fishing effort, not catch, landings or fish abundance.')
             evidence=[Evidence(id='F-GFW',domain='fisheries',title='GFW apparent fishing effort',source='Global Fishing Watch',
-                text=json.dumps({'apparent_fishing_hours':data['total_apparent_fishing_hours'],'query':data['query'],
-                                 'daily_hours':daily,'meaning':'AIS-derived apparent effort, not catch or abundance'}),
-                **provenance_values(data['provenance']),metadata={'unit':'hours','query':data['query'],'records':data['results'][:50]})]
+                text=description,
+                **provenance_values(data['provenance']),metadata={'observation_summary': description, 'unit':'hours','query':data['query'],'records':data['results'][:50]})]
         return AgentResult(domain='fisheries',status=data['status'],evidence=evidence,limitations=data['limitations'],
             visualizations=[{'type':'timeseries','title':'AIS apparent fishing effort','unit':'hours','evidence_id':'F-GFW',
                              'points':[{'time':day,'value':daily[day]} for day in sorted(daily)]}] if daily else [])
@@ -214,8 +287,6 @@ async def biodiversity(plan, request):
                                       text=json.dumps(data['results'], ensure_ascii=False), source='WoRMS',
                                       **provenance_values(data['provenance'])))
         return AgentResult(domain='biodiversity', status='ok' if evidence else 'no_data', evidence=evidence)
-    if (scope.start_date or scope.end_date) and 'gbif' not in request.message.lower():
-        return AgentResult(domain='biodiversity', status='unsupported', limitations=['Date-filtered OBIS retrieval is not implemented; undated occurrences will not be substituted for the requested period.'])
     if 'edna' in request.message.lower():
         return AgentResult(domain='biodiversity', status='unsupported', limitations=['No verified eDNA dataset is configured; generic OBIS occurrences are not molecular biodiversity measurements.'])
     bounds = scope.bbox
@@ -236,15 +307,22 @@ async def biodiversity(plan, request):
         evidence.append(Evidence(id='B-NAME', domain='biodiversity', title='WoRMS species-name resolution',
                                   text=f'Resolved requested name {scope.species} to accepted name {species}.',
                                   source='WoRMS', **provenance_values(taxonomy['provenance'])))
-    data = await integrations.gbif_occurrences(bounds,species,scope.start_date,scope.end_date) if is_gbif else await get_obis(bounds, 50, species)
+    start, end = requested_dates(scope, request.message)
+    if not is_gbif and scope.obis_period == 'all_time':
+        start = end = None
+        limitations.append('OBIS uses the explicitly selected all-recorded-dates inventory; these historical occurrences are not date-aligned to ocean or fishing observations.')
+    data = await integrations.gbif_occurrences(bounds,species,start,end) if is_gbif else await get_obis(bounds, 50, species, None, start, end)
     rows = data['results']
     names = sorted({row['scientific_name'] for row in rows if row['scientific_name']})
     if rows:
         text = f"Retrieved a sample of {len(rows)} occurrence records with {len(names)} distinct reported taxon names: " + ', '.join(names[:30]) + '. This is a sample, not species richness or abundance.'
         evidence.append(Evidence(id='B-OCC', domain='biodiversity', title=('GBIF' if is_gbif else 'OBIS')+' occurrence sample', text=text,
                                   source='GBIF' if is_gbif else 'OBIS', **provenance_values(data['provenance']),
-                                  metadata={'bbox': list(bounds), 'record_count': len(rows), 'records': rows[:15]}))
-    points = [{'latitude': row['latitude'], 'longitude': row['longitude'], 'label': row['scientific_name']} for row in rows]
+                                  metadata={'observation_summary': text, 'bbox': list(bounds), 'query': data.get('query'), 'record_count': len(rows), 'records': rows[:50]}))
+    mapped = rows if is_gbif else [row for row in rows if row.get('quality', {}).get('map_eligible') is True]
+    if len(mapped) < len(rows):
+        limitations.append(f'{len(rows)-len(mapped)} OBIS records have flagged or unchecked locations and are omitted from geographic visualization; they remain in the source sample, not verified fish locations.')
+    points = [{'latitude': row['latitude'], 'longitude': row['longitude'], 'label': row['scientific_name']} for row in mapped]
     return AgentResult(domain='biodiversity', status='ok' if rows else 'no_data', evidence=evidence,
                        limitations=limitations + data['limitations'], visualizations=[{'type': 'locations', 'title': 'Retrieved occurrence locations', 'evidence_id': 'B-OCC', 'points': points}] if rows else [])
 
@@ -295,8 +373,9 @@ async def run_agent(domain, plan, request):
     try:
         result = await asyncio.wait_for(AGENTS[domain](plan, request), timeout=settings.http_timeout_seconds + settings.llm_timeout_seconds + 5)
     except HTTPException as exc:
-        detail=exc.detail if isinstance(exc.detail,str) else f'{domain.capitalize()} source is unavailable.'
-        result=AgentResult(domain=domain,status='needs_input' if exc.status_code==422 else 'unavailable',limitations=[detail])
+        error = source_failure(exc.detail.get('source', domain) if isinstance(exc.detail, dict) else domain, exc)
+        detail = exc.detail if isinstance(exc.detail, str) else error['message']
+        result=AgentResult(domain=domain,status='needs_input' if exc.status_code==422 else 'unavailable',limitations=[detail], source_statuses=[error])
     except (SQLAlchemyError, asyncio.TimeoutError, provider.ModelUnavailable):
         result = AgentResult(domain=domain, status='unavailable', limitations=[f'{domain.capitalize()} retrieval is unavailable or timed out. No missing results have been invented.'])
     result.elapsed_ms = round((time.monotonic() - started) * 1000)

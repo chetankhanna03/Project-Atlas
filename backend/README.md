@@ -24,14 +24,16 @@ by an existing `.env`. The local database initially contains no observations or 
 For PostgreSQL or a different database, run these commands from `backend/`:
 
 ```powershell
-# Set DATABASE_URL in your environment or backend/.env first.
+# Set DATABASE_MODE=configured and DATABASE_URL in your environment first.
 .venv/Scripts/python -m app.init_db
 .venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 `init_db` creates missing tables; it is not a schema migration system. Startup
-and imports do not create tables or contact database/cache services. `/health`
-checks the process; `/ready` checks required database tables. Database errors
+initializes and validates the complete schema for both launch methods. Default
+`DATABASE_MODE=demo` selects `atlas-local.db` even if a legacy DATABASE_URL exists.
+`/health` checks the process; `/ready` reports database type, schema and library,
+observation, landings and specimen counts. Database errors
 return 503 without credentials or SQL details. Back up existing databases and
 use migrations before making future schema changes.
 

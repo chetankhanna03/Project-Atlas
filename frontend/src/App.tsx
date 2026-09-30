@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { KnowledgeGraph, snapshotGraph, type EvidenceGraph } from './components/Views/KnowledgeGraph';
 import {
   Compass,
   Waves,
@@ -35,6 +36,9 @@ import "./atlas.css";
 export default function App() {
   const [tab, setTab] = useState<ActiveTab>("home");
   const [snapshot, setSnapshot] = useState<OceanSnapshot | null>(null);
+  const [chatGraph, setChatGraph] = useState<EvidenceGraph | null>(null);
+  const [graphBasis, setGraphBasis] = useState('dashboard');
+  const loadedGraph = useMemo(()=>snapshotGraph(snapshot),[snapshot]);
   const [domain, setDomain] = useState("");
   const [exploreVisited, setExploreVisited] = useState(false);
   const [menu, setMenu] = useState(false);
@@ -72,6 +76,9 @@ export default function App() {
       title: "Ask Atlas",
       detail: "Questions to understanding",
       icon: MessageCircle,
+    },
+    {
+      id: "graph", title: "Knowledge graph", detail: "Trace evidence and species", icon: Globe2,
     },
     {
       id: "analytics",
@@ -198,6 +205,7 @@ export default function App() {
           </button>
         </header>
         <main className="atlas-canvas">
+          {tab === 'graph' && <div className="atlas-screen"><div className="flex gap-3 mb-4"><button className="atlas-secondary" aria-pressed={graphBasis==='dashboard'} onClick={()=>setGraphBasis('dashboard')}>Loaded dashboard evidence</button><button className="atlas-secondary" disabled={!chatGraph} aria-pressed={graphBasis==='chat'} onClick={()=>setGraphBasis('chat')}>Latest chat evidence</button></div><KnowledgeGraph graph={graphBasis==='chat'&&chatGraph?chatGraph:loadedGraph}/></div>}
           {tab === "home" && (
             <Overview
               snapshot={snapshot}
@@ -249,6 +257,7 @@ export default function App() {
                 initialQuery={question}
                 initialScope={scope}
                 initialDocumentIds={documents}
+                onResponse={(result)=>setChatGraph(result.knowledge_graph)}
               />
             </div>
           )}

@@ -72,4 +72,4 @@ def test_missing_key_status_and_retrieval(client,monkeypatch):
     assert data['model_configured'] is False
     assert data['embeddings_configured'] is False
     assert 'openrouter_api_key' not in data
-    assert client.post('/api/chat',json={'message':'Hello'}).json()['mode']=='evidence_only'
+    assert client.post('/api/chat',json={'message':'Hello'}).json()['mode']=='conversation'

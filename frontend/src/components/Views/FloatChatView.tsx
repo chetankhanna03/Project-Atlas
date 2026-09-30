@@ -11,6 +11,7 @@ import { ChatEvidence } from "./ChatEvidence";
 import { ResearchLibrary } from "./ResearchLibrary";
 
 interface Props {
+  onResponse?: (result: ChatResponse) => void;
   setActiveTab: (tab: ActiveTab) => void;
   initialQuery?: string;
   initialScope?: Scope | null;
@@ -24,6 +25,7 @@ interface Message {
   error?: boolean;
 }
 const suggestions = [
+  "How does warmer water affect fish?",
   "Show SST at latitude 15, longitude 65",
   "Which species have been observed in the Arabian Sea?",
   "Find scientific literature about ocean warming and fisheries",
@@ -33,6 +35,7 @@ export const FloatChatView: React.FC<Props> = ({
   initialQuery,
   initialScope,
   initialDocumentIds,
+  onResponse,
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState(initialQuery || "");
@@ -47,6 +50,7 @@ export const FloatChatView: React.FC<Props> = ({
     if (initialDocumentIds) setDocuments(initialDocumentIds);
   }, [initialDocumentIds]);
   const [useLiterature, setUseLiterature] = useState(false);
+  const [answerMode, setAnswerMode] = useState<'auto' | 'conversation' | 'research'>('auto');
   const pending = useRef<AbortController | null>(null);
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -104,8 +108,10 @@ export const FloatChatView: React.FC<Props> = ({
         documents,
         useLiterature,
         controller.signal,
+        answerMode,
       );
       if (!controller.signal.aborted) {
+        onResponse?.(result);
         setContext(result.plan.scope);
         setMessages((previous) => [
           ...previous,
@@ -162,7 +168,7 @@ export const FloatChatView: React.FC<Props> = ({
             <h1 className="font-bold text-lg text-[#001b3d]">Ask Atlas</h1>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Ocean questions. Retrieved evidence. Traceable answers.
+            Ask simply, explore ocean data, or dig into the literature.
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs">
@@ -262,7 +268,7 @@ export const FloatChatView: React.FC<Props> = ({
                 >
                   {message.role === "user" ? "You" : "Atlas"}
                   {message.result
-                    ? ` | ${message.result.mode === "model" ? "Cited synthesis" : "Retrieved evidence"} | ${message.result.status.replaceAll("_", " ")}`
+                    ? ` | ${message.result.mode === "conversation" ? "Conversation · not source-verified" : message.result.mode === "model" ? "Cited synthesis" : "Retrieved evidence"} | ${message.result.status.replaceAll("_", " ")}`
                     : ""}
                 </div>
                 <p
@@ -270,7 +276,7 @@ export const FloatChatView: React.FC<Props> = ({
                 >
                   {message.content}
                 </p>
-                {message.result && <ChatEvidence result={message.result} />}
+                {message.result && message.result.mode !== 'conversation' && <ChatEvidence result={message.result} />}
               </div>
             </article>
           ))}
@@ -282,7 +288,7 @@ export const FloatChatView: React.FC<Props> = ({
               <span className="material-symbols-outlined animate-spin text-[#008ebe]">
                 progress_activity
               </span>
-              Planning and retrieving supporting evidence...
+              Atlas is working on your answer...
               <button onClick={cancel} className="ml-auto text-xs underline">
                 Cancel
               </button>
@@ -299,6 +305,15 @@ export const FloatChatView: React.FC<Props> = ({
             send();
           }}
         >
+          <label className="block text-xs text-slate-600 mb-3">
+            Answer mode{' '}
+            <select aria-label="Answer mode" value={answerMode} disabled={busy} onChange={e=>setAnswerMode(e.target.value as typeof answerMode)} className="border rounded-lg p-2 bg-white">
+              <option value="auto">Auto — conversation, data or literature</option>
+              <option value="conversation">Conversation — general explanations</option>
+              <option value="research">Research — retrieved sources and citations</option>
+            </select>
+            <span className="block mt-1">{answerMode === 'conversation' ? 'General knowledge, not source-verified. Selected papers and data tools are not queried in this mode.' : 'Auto uses conversation for simple questions. Ask for sources or choose Research for evidence from the library.'}</span>
+          </label>
           <div className="flex items-end gap-3">
             <label className="flex-1">
               <span className="sr-only">Ask Atlas</span>
@@ -307,7 +322,7 @@ export const FloatChatView: React.FC<Props> = ({
                 onChange={(event) => setInput(event.target.value)}
                 rows={2}
                 maxLength={2000}
-                placeholder="Ask about ocean data or scientific evidence..."
+                placeholder="Ask a question, follow up, or ask for sources..."
                 className="w-full resize-none rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm focus:outline-none focus:border-[#008ebe]"
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {

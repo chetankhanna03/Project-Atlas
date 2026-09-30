@@ -1,7 +1,8 @@
 # Project Atlas frontend
 
-React, TypeScript and Vite ocean dashboard. FloatChat connects to the real Atlas
-backend; the other dashboard views still contain prototype data.
+React, TypeScript and Vite ocean workspace. Active views use API records and explicit
+empty/unavailable states. Confirmed unused prototype observations, fake API/DOI
+fallbacks, simulated settings and obsolete navigation were removed.
 
 ## Run locally
 
@@ -15,8 +16,15 @@ the browser does not call model providers directly.
 
 FloatChat supports cited evidence, real retrieved-value charts, follow-up context,
 cancellation, selected document retrieval and administrator document imports.
-Conversation state is kept in memory and resets when leaving the view or starting
-a new conversation. The scientific knowledge library is shared, not per-user.
+Conversation state is kept in memory across navigation; reload or a new conversation
+resets it. The scientific knowledge library is shared, not per-user.
+
+Explore uses explicit Load data. Region, drawn/manual bounds, event dates, selected
+datasets and species carry into Ask Atlas. OBIS filters observation dates upstream;
+recent periods can legitimately contain no records. Knowledge graph offers bounded
+interactive views of loaded observations or latest chat evidence, without requiring
+Neo4j. Analytics compares loaded ARGO near-surface samples and GFW daily effort.
+See the [canonical demo guide](../README.md).
 
 Model and RAG setup: [backend AI guide](../backend/AI_ENGINE.md).
 
@@ -26,4 +34,6 @@ Model and RAG setup: [backend AI guide](../backend/AI_ENGINE.md).
 npm run lint
 npm test
 npm run build
+node check-area-selection.mjs
+node check-demo.mjs
 ```

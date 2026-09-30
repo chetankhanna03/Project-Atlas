@@ -6,6 +6,7 @@ const errors=[];page.on('pageerror',e=>errors.push(e.message));
 await page.goto('http://127.0.0.1:3000/');
 await page.getByRole('button',{name:'Explore',exact:true}).click();
 await expect(page.getByRole('heading',{name:'A new perspective on our ocean.'})).toBeVisible();
+await page.getByRole('button',{name:'Load data',exact:true}).click();
 await expect(page.getByRole('button',{name:'Load data',exact:true})).toBeEnabled({timeout:75000});
 await page.screenshot({path:'dashboard-desktop.png'});
 console.log('Desktop',JSON.stringify({errors,overflow:await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)}));

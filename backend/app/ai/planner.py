@@ -1,4 +1,5 @@
 import re
+import asyncio
 from datetime import date
 from app.ai.schemas import ChatRequest, Plan, Scope
 from app.ai import provider
@@ -38,6 +39,8 @@ def effective_question(request):
 
 
 def general_explanation(question):
+    if re.search(r'\b(available|retrieve|show|observations?|oceanographic|information|datasets?)\b', question, re.I):
+        return False
     if re.match(r'\s*(what (?:is|are)|define|explain the (?:term|concept))\b', question, re.I):
         return not bool(re.search(r'\b(latest|today|latitude|longitude|forecast|predict)\b|\d', question, re.I))
     return bool(re.search(r'\b(how|why|explain|in general)\b', question, re.I)
@@ -49,7 +52,7 @@ def rule_plan(request: ChatRequest) -> Plan:
     text = request.message.lower()
     scope = request.context.model_copy(deep=True) if request.context else Scope()
     domains = []
-    if re.search(r'\b(sst|temperature|salinity|ocean|warming|heatwave|current|currents|chlorophyll|oxygen|sea level|argo)\b', text):
+    if re.search(r'\b(sst|temperature|salinity|ocean|oceanographic|warming|heatwave|current|currents|chlorophyll|oxygen|sea level|argo|copernicus)\b', text):
         domains.append('ocean')
     if re.search(r'\b(fisheries|fishing|gfw|catch|landings|vessels?|fleet|fish populations?)\b', text):
         domains.append('fisheries')
@@ -58,10 +61,8 @@ def rule_plan(request: ChatRequest) -> Plan:
     research_intent = bool(re.search(r'\b(papers?|studies|study|research|literature|openalex|evidence|explain|why|relationship|effects?|affect|impact)\b', text))
     if research_intent:
         # Pure literature questions must not unnecessarily fetch observations.
-        if re.search(r'\b(papers?|studies|literature|research|openalex)\b', text) and not re.search(r'\b(compare|measure|show.*(data|sst)|latest|current temperature)\b', text):
+        if re.search(r'\b(papers?|studies|literature|research|openalex)\b', text) and not re.search(r'\b(compare|measure|show.*(data|sst)|latest|current temperature|available|information|retrieve|observations?)\b', text):
             domains = []
-        domains.append('research')
-    if len(domains) > 1 and 'research' not in domains:
         domains.append('research')
     if request.document_ids and not domains:
         domains = ['research']
@@ -72,6 +73,8 @@ def rule_plan(request: ChatRequest) -> Plan:
     matched_regions = [value for key, value in REGIONS.items() if key in text]
     if len(matched_regions) == 1:
         name, bounds, _ = matched_regions[0]
+        if scope.bbox and scope.region and scope.region.lower() == name.lower():
+            bounds = scope.bbox
         scope.region, scope.bbox = name, bounds
         scope.latitude = scope.longitude = None
     if not matched_regions:
@@ -101,6 +104,8 @@ def rule_plan(request: ChatRequest) -> Plan:
         inference_limit = None
     dates = re.findall(r'\b\d{4}-\d{2}-\d{2}\b', text)
     years = re.findall(r'\b(?:19|20)\d{2}\b', text)
+    if (dates or years) and re.search(r'\b(obis|occurrences?|biodiversity|species)\b', text) and 'all recorded dates' not in text:
+        scope.obis_period = 'selected'
     try:
         if dates:
             scope.start_date, scope.end_date = date.fromisoformat(dates[0]), date.fromisoformat(dates[-1])
@@ -135,19 +140,30 @@ async def make_plan(request: ChatRequest) -> Plan:
         return Plan(domains=['research'], research_query=query[:1000],
                     limitations=['Literature explanation based on the selected sources, not a new observation or computed regional analysis.'])
     fallback = rule_plan(request)
-    if not provider.model_enabled():
+    if not provider.model_enabled() or len(fallback.domains) > 1:
         return finalize(fallback)
     try:
-        plan = await provider.generate(SYSTEM, {'question': request.message, 'history': [t.model_dump() for t in request.history],
+        plan = await asyncio.wait_for(provider.generate(SYSTEM, {'question': request.message, 'history': [t.model_dump() for t in request.history],
                                                'context': request.context.model_dump(mode='json') if request.context else None,
-                                               'document_ids': request.document_ids}, Plan)
+                                               'document_ids': request.document_ids}, Plan), timeout=12)
         plan.planner_mode = 'model'
+        # Explicit deterministic coverage is authoritative; the model cannot drop
+        # requested domains or introduce unrelated providers.
+        if fallback.domains:
+            plan.domains = fallback.domains
+            plan.clarification = fallback.clarification
         plan.limitations = list(dict.fromkeys(plan.limitations + fallback.limitations))
         # Geographic scope comes from explicit input or curated bounds, never guessed model coordinates.
         plan.scope.latitude, plan.scope.longitude = fallback.scope.latitude, fallback.scope.longitude
         plan.scope.bbox = fallback.scope.bbox
         if fallback.scope.region:
             plan.scope.region = fallback.scope.region
+        if request.context:
+            plan.scope.start_date, plan.scope.end_date = fallback.scope.start_date, fallback.scope.end_date
+            plan.scope.species = fallback.scope.species
+            plan.scope.parameter = fallback.scope.parameter
+            plan.scope.selected_datasets = fallback.scope.selected_datasets
+            plan.scope.obis_period = fallback.scope.obis_period
         # Explicit dates/coordinates are parsed outside the model and take precedence.
         if re.search(r'\b(?:19|20)\d{2}\b|\b(?:last|past)\s+\d+\s+days?\b', request.message.lower()):
             plan.scope.start_date, plan.scope.end_date, plan.scope.days = fallback.scope.start_date, fallback.scope.end_date, fallback.scope.days
@@ -156,7 +172,7 @@ async def make_plan(request: ChatRequest) -> Plan:
         if fallback.clarification and (re.search(r'\d', request.message) or 'Multi-region' in fallback.clarification):
             return finalize(fallback)
         return finalize(plan)
-    except provider.ModelUnavailable:
+    except (provider.ModelUnavailable, asyncio.TimeoutError):
         fallback.limitations.append('Model planning unavailable; used the limited rule-based planner.')
         return finalize(fallback)
 

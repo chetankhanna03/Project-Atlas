@@ -8,7 +8,7 @@ try {
   let data={sources:[],documents:[],status:'no_data',results:[],profiles:[]};
   if(u.pathname.endsWith('/obis')) {
    const second=u.searchParams.has('after');
-   data={status:'ok',results:Array.from({length:second?5:100},(_,i)=>({record_id:String(i+(second?100:0)),scientific_name:'Synthetic browser fixture',latitude:15,longitude:65})),total_matching:105,next_cursor:second?null:'99',limitations:[]};
+   data={status:'ok',results:Array.from({length:second?5:100},(_,i)=>({record_id:String(i+(second?100:0)),scientific_name:'Synthetic browser fixture',latitude:15,longitude:65,quality:{map_eligible:true,flags:[]}})),total_matching:105,next_cursor:second?null:'99',limitations:[]};
   }
   if(u.pathname.endsWith('/argo/gdac')) {
    const second=u.searchParams.has('offset');
@@ -18,9 +18,10 @@ try {
  });
  await page.goto('http://127.0.0.1:3000');
  await page.getByRole('button',{name:'Explore',exact:true}).click();
- await expect(page.getByText('100 records shown',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Load data',exact:true}).click();
+ await expect(page.getByText('100 records eligible for map',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Load more OBIS records',exact:true}).click();
- await expect(page.getByText('105 records shown',{exact:true})).toBeVisible();
+ await expect(page.getByText('105 records eligible for map',{exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Load more OBIS records',exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Load more ARGO profiles',exact:true}).click();
  await expect(page.getByText(/5 files inspected of 5 matching/)).toBeVisible();

@@ -1,4 +1,5 @@
 import React from "react";
+import { KnowledgeGraph } from './KnowledgeGraph';
 import {
   ChatResponse,
   safeSourceUrl,
@@ -142,6 +143,7 @@ export function ChatEvidence({ result }: { result: ChatResponse }) {
             Source links and explicit mentions; these do not establish
             causation.
           </p>
+          <KnowledgeGraph graph={result.knowledge_graph}/>
           <ul className="mt-2 space-y-1">
             {result.knowledge_graph.edges.slice(0, 20).map((edge, index) => (
               <li key={index}>
@@ -189,6 +191,7 @@ export function ChatEvidence({ result }: { result: ChatResponse }) {
                 </div>
                 <p className="text-slate-500 mt-1">
                   {citation.source}
+                  {` · ${citation.kind === 'literature' ? 'Literature' : citation.kind === 'computed' ? 'Computed result' : citation.kind === 'metadata' ? 'Catalog metadata' : 'Retrieved observation'}`}
                   {citation.year ? ` · ${citation.year}` : ""}
                   {citation.page ? ` · page ${citation.page}` : ""}
                   {citation.kind === "local_unverified"

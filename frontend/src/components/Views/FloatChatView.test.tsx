@@ -80,6 +80,7 @@ test("uses the backend, renders citations and passes follow-up context", async (
     [],
     false,
     expect.any(AbortSignal),
+    'auto',
   );
   vi.mocked(api.sendChat).mockResolvedValue({ ...answer, request_id: "next" });
   await user.type(
@@ -152,4 +153,18 @@ test("carries selected map area and library papers into the request", async () =
   await waitFor(() => expect(api.sendChat).toHaveBeenCalled());
   expect(vi.mocked(api.sendChat).mock.calls[0][2]).toEqual(scope);
   expect(vi.mocked(api.sendChat).mock.calls[0][3]).toEqual(["paper-1"]);
+});
+
+
+test("conversation mode sends history-compatible requests and labels unsourced replies", async () => {
+  const user = userEvent.setup({ delay: null });
+  vi.mocked(api.sendChat).mockResolvedValue({...answer, mode: 'conversation', answer: 'A general explanation.', citations: [], agents: []});
+  render(<FloatChatView setActiveTab={vi.fn()} />);
+  await user.selectOptions(screen.getByRole('combobox', {name: 'Answer mode'}), 'conversation');
+  await user.type(screen.getByRole('textbox', {name: 'Ask Atlas'}), 'Why is the ocean salty?');
+  await user.click(screen.getByRole('button', {name: 'Ask', exact: true}));
+  await screen.findByText('A general explanation.');
+  expect(vi.mocked(api.sendChat).mock.calls[0][6]).toBe('conversation');
+  expect(screen.getByText(/Conversation.*not source-verified/)).toBeTruthy();
+  expect(screen.queryByText(/Planner/)).toBeNull();
 });

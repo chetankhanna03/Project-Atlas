@@ -1,4 +1,6 @@
 export interface Scope {
+  obis_period?: 'all_time' | 'selected';
+  selected_datasets?: string[];
   region?: string | null;
   latitude?: number | null;
   longitude?: number | null;
@@ -42,7 +44,7 @@ export interface ChatResponse {
   request_id: string;
   status: string;
   answer: string;
-  mode: "model" | "evidence_only";
+  mode: "model" | "evidence_only" | "conversation";
   plan: { domains: string[]; scope: Scope; planner_mode: string };
   citations: Evidence[];
   agents: Array<{ domain: string; status: string; elapsed_ms: number }>;
@@ -50,7 +52,7 @@ export interface ChatResponse {
   follow_ups: string[];
   visualizations: Visualization[];
   knowledge_graph: {
-    nodes: Array<{ id: string; kind: string; label: string }>;
+    nodes: Array<{ id: string; kind: string; label: string; data?: Record<string, any>; citation_id?: string }>;
     edges: Array<{ source: string; target: string; kind: string }>;
     persistence: string;
     limitations: string[];
@@ -95,6 +97,8 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
 export const getAIStatus = (signal?: AbortSignal) =>
   jsonRequest<AIStatus>("/ai/status", { signal });
 
+export const getTaxonomy = (name: string) => jsonRequest<any>(`/taxonomy/resolve?name=${encodeURIComponent(name)}`);
+
 export interface SourceInfo {
   id: string;
   name: string;
@@ -121,6 +125,7 @@ export function sendChat(
   documentIds: string[],
   useLiterature: boolean,
   signal: AbortSignal,
+  answerMode: 'auto' | 'conversation' | 'research' = 'auto',
 ) {
   return jsonRequest<ChatResponse>("/chat", {
     method: "POST",
@@ -132,6 +137,7 @@ export function sendChat(
       context,
       document_ids: documentIds,
       use_literature_search: useLiterature,
+      answer_mode: answerMode,
     }),
   });
 }

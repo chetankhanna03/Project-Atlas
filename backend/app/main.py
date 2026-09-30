@@ -5,11 +5,23 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
 from app.database import engine
+from app.database import init_db, database_health
+from contextlib import asynccontextmanager
+from starlette.concurrency import run_in_threadpool
 from app.middleware import RateLimitMiddleware
 from app.api import argo, fisheries, biodiversity, oceanography, erddap, taxonomy, protected_areas, search, cache, datasets, ai
 from app.api import integrations, source_status, science
 
-app = FastAPI(title='Project Atlas API', description='Grounded ocean intelligence and scientific retrieval', version='0.3.0')
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        await run_in_threadpool(init_db, engine)
+    except SQLAlchemyError:
+        raise RuntimeError('Atlas database initialization failed. Check database mode, connectivity and schema; no alternate database was selected.') from None
+    yield
+
+
+app = FastAPI(title='Project Atlas API', description='Grounded ocean intelligence and scientific retrieval', version='0.3.0', lifespan=lifespan)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                    allow_methods=['GET', 'POST', 'PUT', 'DELETE'],
@@ -32,8 +44,6 @@ def health():
 @app.get('/ready')
 @app.get('/db-test', include_in_schema=False)
 def ready():
-    with engine.connect() as connection:
-        connection.execute(text('SELECT 1 FROM argo_observations LIMIT 1'))
-        connection.execute(text('SELECT 1 FROM fisheries_landings LIMIT 1'))
-        connection.execute(text('SELECT 1 FROM research_chunks LIMIT 1'))
-    return {'status': 'ready', 'database': 'connected'}
+    report = database_health(engine)
+    return JSONResponse(status_code=200 if report['schema_status'] == 'ready' else 503,
+                        content={'status': report['schema_status'], **report})
